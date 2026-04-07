@@ -476,11 +476,25 @@ input {
   }
 
   .holding-top-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .holding-bottom-grid {
     grid-template-columns: 1fr 1fr;
+  }
+
+  .holding-cell {
+    padding: 8px 10px;
+  }
+
+  .holding-label {
+    font-size: 11px;
+  }
+
+  .holding-value {
+    font-size: 14px;
+    margin-top: 5px;
   }
 }
 
