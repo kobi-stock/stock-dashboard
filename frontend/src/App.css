@@ -1,0 +1,536 @@
+* {
+  box-sizing: border-box;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  background: #08152e;
+  color: #f8fafc;
+  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+.app-shell {
+  min-height: 100vh;
+  background: radial-gradient(circle at top, rgba(59, 130, 246, 0.16), transparent 28%), #08152e;
+}
+
+.app-container {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+  padding-bottom: 28px;
+}
+
+.app-header {
+  padding: 18px 16px 8px;
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+}
+
+.header-desc {
+  margin: 10px 0 0;
+  color: #d6e1f2;
+  font-size: 14px;
+}
+
+.status-box {
+  margin-top: 16px;
+  color: #e2e8f0;
+  font-size: 14px;
+}
+
+.status-box strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 18px;
+}
+
+.error-box {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(127, 29, 29, 0.45);
+  color: #fecaca;
+  font-size: 13px;
+}
+
+.top-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 8px 16px 12px;
+  background: rgba(8, 21, 46, 0.94);
+  backdrop-filter: blur(10px);
+}
+
+.top-tabs.four-tabs {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+.tab {
+  height: 42px;
+  border-radius: 14px;
+  border: 1px solid #2a3a56;
+  background: #132546;
+  color: #dce6f5;
+  font-weight: 700;
+}
+
+.tab.active {
+  background: linear-gradient(180deg, #2d6bff, #1d4ed8);
+  border-color: #2d6bff;
+  color: #fff;
+}
+
+.tab-body {
+  padding: 0 16px;
+}
+
+.section-title {
+  margin: 18px 0 10px;
+  font-size: 18px;
+}
+
+.card-grid,
+.news-list,
+.holding-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+.price-card,
+.news-card,
+.empty-box,
+.search-results,
+.chart-panel,
+.invest-form-panel,
+.holding-card,
+.invest-summary-panel {
+  border: 1px solid #243657;
+  background: rgba(12, 24, 49, 0.92);
+  border-radius: 18px;
+  box-shadow: 0 12px 26px rgba(2, 6, 23, 0.25);
+}
+
+.price-card {
+  padding: 14px;
+}
+
+.price-card.clickable {
+  cursor: pointer;
+}
+
+.price-card.selected {
+  border-color: #3773ff;
+  box-shadow: 0 0 0 1px rgba(55, 115, 255, 0.5), 0 12px 26px rgba(2, 6, 23, 0.25);
+}
+
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.card-title-wrap {
+  min-width: 0;
+}
+
+.card-title {
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.3;
+  word-break: keep-all;
+}
+
+.card-subtitle,
+.muted {
+  color: #96a6c3;
+  font-size: 12px;
+}
+
+.card-subtitle {
+  margin-top: 4px;
+}
+
+.card-price {
+  margin-top: 10px;
+  font-size: 25px;
+  font-weight: 800;
+  line-height: 1.15;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.card-change {
+  margin-top: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.card-change.up,
+.holding-value.up,
+.summary-value.up,
+.chart-line.up {
+  color: #ff8181;
+  stroke: #ff8181;
+}
+
+.card-change.down,
+.holding-value.down,
+.summary-value.down,
+.chart-line.down {
+  color: #7db7ff;
+  stroke: #7db7ff;
+}
+
+.card-change.flat,
+.chart-line.flat {
+  color: #dce6f5;
+  stroke: #dce6f5;
+}
+
+.mini-btn {
+  border: 1px solid #39517d;
+  background: #17305a;
+  color: #fff;
+  border-radius: 10px;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.search-box {
+  margin: 6px 0 12px;
+}
+
+.search-box input,
+.invest-field input {
+  width: 100%;
+  height: 46px;
+  border-radius: 14px;
+  border: 1px solid #314663;
+  background: #0d1d39;
+  color: white;
+  padding: 0 14px;
+  outline: none;
+}
+
+.search-box input::placeholder,
+.invest-field input::placeholder {
+  color: #8093b3;
+}
+
+.search-results {
+  overflow: hidden;
+}
+
+.search-row {
+  width: 100%;
+  padding: 13px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  border-bottom: 1px solid #21324f;
+  background: transparent;
+  color: white;
+  text-align: left;
+}
+
+.search-row:last-child {
+  border-bottom: 0;
+}
+
+.direct-row {
+  background: rgba(45, 107, 255, 0.08);
+}
+
+.news-card {
+  display: block;
+  padding: 14px;
+  text-decoration: none;
+  color: inherit;
+}
+
+.news-title {
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1.45;
+}
+
+.news-desc {
+  margin-top: 8px;
+  color: #dbe5f4;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.empty-box,
+.chart-empty {
+  padding: 20px 14px;
+  text-align: center;
+  color: #d8e4f6;
+}
+
+.chart-panel {
+  margin-top: 14px;
+  padding: 14px;
+}
+
+.chart-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 12px;
+}
+
+.chart-title {
+  font-size: 17px;
+  font-weight: 800;
+}
+
+.chart-subtitle {
+  margin-top: 4px;
+  color: #96a6c3;
+  font-size: 12px;
+}
+
+.period-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.period-btn {
+  height: 34px;
+  min-width: 44px;
+  border-radius: 10px;
+  border: 1px solid #39517d;
+  background: #132546;
+  color: #dce6f5;
+}
+
+.period-btn.active {
+  background: #1d4ed8;
+  border-color: #2d6bff;
+  color: white;
+}
+
+.chart-svg-wrap {
+  width: 100%;
+}
+
+.chart-svg {
+  display: block;
+  width: 100%;
+  height: 220px;
+}
+
+.chart-line {
+  fill: none;
+  stroke-width: 3;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-date-row {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  color: #96a6c3;
+  font-size: 12px;
+}
+
+.invest-form-panel {
+  padding: 14px;
+}
+
+.invest-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.invest-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.invest-field label {
+  color: #dce6f5;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.invest-field-wide {
+  grid-column: 1 / -1;
+}
+
+.invest-results {
+  margin-top: 12px;
+}
+
+.invest-selected-box {
+  margin-top: 12px;
+  padding-top: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid #203351;
+}
+
+.invest-summary-panel {
+  margin-top: 14px;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.summary-item {
+  padding: 12px;
+  border: 1px solid #243657;
+  border-radius: 14px;
+  background: rgba(8, 21, 46, 0.55);
+}
+
+.summary-value {
+  margin-top: 8px;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.holding-card {
+  padding: 14px;
+}
+
+.holding-top-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.holding-bottom-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.holding-cell {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid #253a5e;
+  background: rgba(8, 21, 46, 0.55);
+}
+
+.holding-label {
+  color: #8ea3c8;
+  font-size: 12px;
+}
+
+.holding-value {
+  margin-top: 6px;
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1.3;
+  word-break: keep-all;
+}
+
+@media (max-width: 480px) {
+  .invest-summary-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .invest-selected-box {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .holding-top-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .holding-bottom-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (min-width: 390px) {
+  .card-grid,
+  .news-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .price-card {
+    padding: 12px;
+  }
+
+  .card-title {
+    font-size: 15px;
+  }
+
+  .card-price {
+    font-size: 22px;
+  }
+
+  .mini-btn {
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .chart-panel {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 700px) {
+  .holding-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .price-card {
+    padding: 14px;
+  }
+
+  .card-title {
+    font-size: 16px;
+  }
+
+  .card-price {
+    font-size: 25px;
+  }
+
+  .mini-btn {
+    padding: 6px 10px;
+    font-size: inherit;
+  }
+}
