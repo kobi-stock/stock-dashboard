@@ -802,12 +802,13 @@ export default function App() {
     }
   }
 
-  async function refreshAll() {
+  async function refreshMarketAndNews() {
     setErrorText("");
 
-    const okMarket = await fetchMarket();
-    const okNews = await fetchNews();
-    await refreshNonRealtimeStocks();
+    const [okMarket, okNews] = await Promise.all([
+      fetchMarket(),
+      fetchNews(),
+    ]);
 
     const successes = [okMarket, okNews].filter(Boolean).length;
     if (successes === 0) {
@@ -825,8 +826,17 @@ export default function App() {
 
   useEffect(() => {
     fetchDefaultStocksFromBackend();
-    refreshAll();
-    const timer = window.setInterval(refreshAll, LIGHT_REFRESH_MS);
+  }, []);
+
+  useEffect(() => {
+    refreshMarketAndNews();
+    const timer = window.setInterval(refreshMarketAndNews, LIGHT_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    refreshNonRealtimeStocks();
+    const timer = window.setInterval(refreshNonRealtimeStocks, LIGHT_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -1128,10 +1138,14 @@ export default function App() {
     [marketItems]
   );
 
-  const commodityItems = useMemo(
-    () => marketItems.filter((item) => ["GOLD", "WTI", "BRENT"].includes(item.key)),
-    [marketItems]
-  );
+  const commodityRows = useMemo(() => {
+    const byKey = new Map(marketItems.map((item) => [item.key, item]));
+    return [
+      ["WTI", "BRENT"],
+      ["GOLD", "SILVER"],
+      ["COPPER", "STEEL"],
+    ].map((row) => row.map((key) => byKey.get(key)).filter(Boolean));
+  }, [marketItems]);
 
   const fxItems = useMemo(
     () => marketItems.filter((item) => ["USDKRW", "JPYKRW"].includes(item.key)),
@@ -1206,9 +1220,17 @@ export default function App() {
               </div>
 
               <h2 className="section-title">원자재</h2>
-              <div className="card-grid">
-                {commodityItems.length ? commodityItems.map((item) => (
-                  <PriceCard key={item.key} item={item} />
+              <div style={{ display: "grid", gap: 12 }}>
+                {commodityRows.some((row) => row.length) ? commodityRows.map((row, rowIndex) => (
+                  <div
+                    key={`commodity-row-${rowIndex}`}
+                    style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}
+                  >
+                    {row.map((item) => (
+                      <PriceCard key={item.key} item={item} />
+                    ))}
+                    {row.length === 1 ? <div /> : null}
+                  </div>
                 )) : <div className="empty-box">표시할 원자재 데이터가 없습니다.</div>}
               </div>
 

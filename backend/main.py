@@ -6,6 +6,9 @@ from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 from html import unescape
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+import copy
+import threading
 from typing import Any
 
 import requests
@@ -87,9 +90,12 @@ INDEX_TICKERS = {
     "NASDAQ": "^IXIC",
     "DOW_FUT": "YM=F",
     "NASDAQ_FUT": "NQ=F",
-    "GOLD": "GC=F",
     "WTI": "CL=F",
     "BRENT": "BZ=F",
+    "GOLD": "GC=F",
+    "SILVER": "SI=F",
+    "COPPER": "HG=F",
+    "STEEL": "TIO=F",
     "USDKRW": "KRW=X",
     "JPYKRW": "JPYKRW=X",
 }
@@ -101,9 +107,12 @@ INDEX_LABELS = {
     "NASDAQ": "나스닥",
     "DOW_FUT": "다우선물",
     "NASDAQ_FUT": "나스닥선물",
-    "GOLD": "금",
     "WTI": "WTI",
     "BRENT": "브렌트유",
+    "GOLD": "금",
+    "SILVER": "은",
+    "COPPER": "구리",
+    "STEEL": "철강",
     "USDKRW": "달러/원",
     "JPYKRW": "엔/원",
 }
@@ -111,7 +120,9 @@ INDEX_LABELS = {
 INDEX_ORDER = [
     "DOW_FUT", "NASDAQ_FUT",
     "KOSPI", "KOSDAQ", "DOW", "NASDAQ",
-    "GOLD", "WTI", "BRENT",
+    "WTI", "BRENT",
+    "GOLD", "SILVER",
+    "COPPER", "STEEL",
     "USDKRW", "JPYKRW",
 ]
 
@@ -170,6 +181,12 @@ NXT_CACHE: dict[str, dict[str, Any]] = {}
 REALTIME_QUOTES_CACHE: dict[str, dict[str, Any]] = {}
 LAST_GOOD_QUOTES_CACHE: dict[str, dict[str, Any]] = {}
 _KIS_DISABLED_UNTIL: datetime | None = None
+
+MARKET_CACHE_TTL_SECONDS = 45
+NEWS_CACHE_TTL_SECONDS = 45
+_MARKET_CACHE: dict[str, Any] = {"items": None, "fetched_at": None}
+_NEWS_CACHE: dict[str, dict[str, Any]] = {}
+_CACHE_LOCK = threading.Lock()
 
 
 def _strip_possible_isin_prefix(text: str) -> str:
@@ -1004,6 +1021,131 @@ async def sync_kis_realtime_subscriptions() -> None:
     await KIS_REALTIME.update_tickers(wanted)
 
 
+def _is_cache_fresh(cached_at: datetime | None, ttl_seconds: int) -> bool:
+    return isinstance(cached_at, datetime) and (datetime.now() - cached_at) <= timedelta(seconds=ttl_seconds)
+
+
+def _clone_items(items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    if not items:
+        return []
+    return copy.deepcopy(items)
+
+
+def _fetch_single_market_item(key: str, ticker: str) -> dict[str, Any]:
+    try:
+        quote = get_yf_quote(ticker, INDEX_LABELS.get(key, key))
+    except Exception as exc:
+        print("market fetch error:", key, ticker, exc)
+        quote = {"name": INDEX_LABELS.get(key, key), "ticker": ticker, "price": None, "change": None, "changePercent": None}
+    quote["key"] = key
+    quote.pop("extended", None)
+    quote.pop("hasExtended", None)
+    return quote
+
+
+def build_market_items() -> list[dict[str, Any]]:
+    keys = list(INDEX_TICKERS.items())
+    if not keys:
+        return []
+
+    items: list[dict[str, Any]] = []
+    max_workers = min(6, len(keys)) or 1
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(_fetch_single_market_item, key, ticker) for key, ticker in keys]
+        for future in futures:
+            try:
+                items.append(future.result())
+            except Exception as exc:
+                print("market future error:", exc)
+
+    items.sort(key=lambda item: INDEX_ORDER.index(item["key"]) if item.get("key") in INDEX_ORDER else 999)
+    return items
+
+
+def get_cached_market_items(force_refresh: bool = False) -> list[dict[str, Any]]:
+    with _CACHE_LOCK:
+        cached_at = _MARKET_CACHE.get("fetched_at")
+        cached_items = _MARKET_CACHE.get("items")
+        if not force_refresh and _is_cache_fresh(cached_at, MARKET_CACHE_TTL_SECONDS) and cached_items:
+            return _clone_items(cached_items)
+
+    items = build_market_items()
+
+    with _CACHE_LOCK:
+        _MARKET_CACHE["items"] = items
+        _MARKET_CACHE["fetched_at"] = datetime.now()
+
+    return _clone_items(items)
+
+
+def build_news_items(query: str = "증시") -> list[dict[str, Any]]:
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        return []
+
+    queries = [query]
+    if query == "증시":
+        queries = ["증시", "주식", "코스피", "나스닥"]
+
+    results_by_query: dict[str, list[dict[str, Any]]] = {one_query: [] for one_query in queries}
+    max_workers = min(4, len(queries)) or 1
+
+    def fetch_one(one_query: str) -> tuple[str, list[dict[str, Any]]]:
+        try:
+            return one_query, fetch_naver_news_once(one_query, display=6)
+        except Exception as exc:
+            print(f"news fetch error ({one_query}):", exc)
+            return one_query, []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = [executor.submit(fetch_one, one_query) for one_query in queries]
+        for future in futures:
+            try:
+                one_query, items = future.result()
+                results_by_query[one_query] = items
+            except Exception as exc:
+                print("news future error:", exc)
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for one_query in queries:
+        for item in results_by_query.get(one_query, []):
+            key = item.get("link") or item.get("title")
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(item)
+            if len(merged) >= 10:
+                return merged[:10]
+
+    return merged[:10]
+
+
+def get_cached_news_items(query: str = "증시", force_refresh: bool = False) -> list[dict[str, Any]]:
+    with _CACHE_LOCK:
+        cache_entry = _NEWS_CACHE.get(query, {})
+        cached_at = cache_entry.get("fetched_at")
+        cached_items = cache_entry.get("items")
+        if not force_refresh and _is_cache_fresh(cached_at, NEWS_CACHE_TTL_SECONDS) and cached_items is not None:
+            return _clone_items(cached_items)
+
+    items = build_news_items(query)
+
+    with _CACHE_LOCK:
+        _NEWS_CACHE[query] = {"items": items, "fetched_at": datetime.now()}
+
+    return _clone_items(items)
+
+
+async def prewarm_light_data() -> None:
+    try:
+        await asyncio.gather(
+            asyncio.to_thread(get_cached_market_items, True),
+            asyncio.to_thread(get_cached_news_items, "증시", True),
+        )
+    except Exception as exc:
+        print("prewarm error:", exc)
+
+
 @app.get("/")
 def root():
     return {"message": "ok"}
@@ -1016,18 +1158,7 @@ def health():
 
 @app.get("/market")
 def market():
-    items = []
-    for key, ticker in INDEX_TICKERS.items():
-        try:
-            quote = get_yf_quote(ticker, INDEX_LABELS.get(key, key))
-        except Exception:
-            quote = {"name": INDEX_LABELS.get(key, key), "ticker": ticker, "price": None, "change": None, "changePercent": None}
-        quote["key"] = key
-        quote.pop("extended", None)
-        quote.pop("hasExtended", None)
-        items.append(quote)
-    items.sort(key=lambda item: INDEX_ORDER.index(item["key"]) if item.get("key") in INDEX_ORDER else 999)
-    return {"items": items}
+    return {"items": get_cached_market_items()}
 
 
 @app.get("/stocks")
@@ -1186,6 +1317,7 @@ async def startup_event():
     await KIS_REALTIME.ensure_running()
     if REALTIME_HUB.task is None:
         REALTIME_HUB.task = asyncio.create_task(REALTIME_HUB.publish_loop())
+    asyncio.create_task(prewarm_light_data())
 
 
 @app.on_event("shutdown")
