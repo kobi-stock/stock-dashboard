@@ -17,15 +17,13 @@ const WS_BASE = API_BASE.replace(/^http/i, "ws");
 const EXTRA_STOCKS_KEY = "extraStocks";
 const DEFAULT_STOCKS_KEY = "defaultStocks";
 const HOLDINGS_KEY = "investmentHoldings";
-const MARKET_CACHE_KEY = "marketItemsCache";
-const NEWS_CACHE_KEY = "newsItemsCache";
 
 function normalizeTicker(ticker) {
   return String(ticker || "").trim().toUpperCase();
 }
 
-function isKoreanRealtimeTicker(ticker) {
-  return /^\d{6}$/.test(normalizeTicker(ticker).split(".")[0]);
+function isKoreanTicker(ticker) {
+  return /^\d{6}(?:\.(KS|KQ))?$/.test(normalizeTicker(ticker));
 }
 
 function toNumber(value) {
@@ -44,6 +42,8 @@ function normalizeSavedItems(items) {
       changePercent: item?.changePercent ?? null,
       nxt: item?.nxt ?? null,
       extended: item?.extended ?? null,
+      asOf: item?.asOf ?? null,
+      stale: item?.stale ?? false,
     }))
     .filter((item) => item.ticker);
 }
@@ -64,6 +64,8 @@ function normalizeHoldings(items) {
         changePercent: item?.changePercent ?? null,
         nxt: item?.nxt ?? null,
         extended: item?.extended ?? null,
+        asOf: item?.asOf ?? null,
+        stale: item?.stale ?? false,
       };
     })
     .filter((item) => item.ticker && item.quantity > 0 && item.avgPrice > 0);
@@ -80,26 +82,6 @@ function loadSavedItems(key, type = "stocks") {
 }
 
 function persistItems(key, items) {
-  try {
-    const safeItems = Array.isArray(items) ? items : [];
-    const raw = JSON.stringify(safeItems);
-    localStorage.setItem(key, raw);
-    sessionStorage.setItem(key, raw);
-  } catch {}
-}
-
-
-function loadJsonArray(key) {
-  try {
-    const raw = localStorage.getItem(key) || sessionStorage.getItem(key);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function persistJsonArray(key, items) {
   try {
     const safeItems = Array.isArray(items) ? items : [];
     const raw = JSON.stringify(safeItems);
@@ -182,7 +164,7 @@ function PriceCard({ item, removable = false, onRemove, onSelect, selected = fal
       <div className="card-head">
         <div className="card-title-wrap">
           <div className="card-title">{item?.name || item?.ticker}</div>
-          <div className="card-subtitle">{item?.ticker}</div>
+          <div className="card-subtitle">{item?.ticker}{item?.stale ? " · 지연" : ""}</div>
         </div>
         {removable ? (
           <button type="button" className="mini-btn" onClick={handleRemoveClick}>
@@ -224,7 +206,7 @@ function HoldingCard({ item, onRemove }) {
       <div className="card-head">
         <div className="card-title-wrap">
           <div className="card-title">{item?.name || item?.ticker}</div>
-          <div className="card-subtitle">{item?.ticker}</div>
+          <div className="card-subtitle">{item?.ticker}{item?.stale ? " · 지연" : ""}</div>
         </div>
         <button type="button" className="mini-btn" onClick={onRemove}>
           삭제
@@ -393,9 +375,9 @@ function LineChart({ data = [] }) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("stocks");
-  const [marketItems, setMarketItems] = useState(loadJsonArray(MARKET_CACHE_KEY));
+  const [marketItems, setMarketItems] = useState([]);
   const [stockItems, setStockItems] = useState(loadSavedItems(DEFAULT_STOCKS_KEY));
-  const [newsItems, setNewsItems] = useState(loadJsonArray(NEWS_CACHE_KEY));
+  const [newsItems, setNewsItems] = useState([]);
   const [extraStocks, setExtraStocks] = useState(loadSavedItems(EXTRA_STOCKS_KEY));
   const [holdings, setHoldings] = useState(loadSavedItems(HOLDINGS_KEY, "holdings"));
   const [searchKeyword, setSearchKeyword] = useState("");
@@ -483,14 +465,11 @@ export default function App() {
   async function fetchMarket() {
     try {
       const data = await fetchJson("/market");
-      const items = extractItems(data);
-      setMarketItems(items);
-      persistJsonArray(MARKET_CACHE_KEY, items);
-      setLastUpdated(new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+      setMarketItems(extractItems(data));
       return true;
     } catch (error) {
       console.error("fetchMarket", error);
-      setMarketItems((prev) => (prev?.length ? prev : []));
+      setMarketItems([]);
       return false;
     }
   }
@@ -516,14 +495,11 @@ export default function App() {
   async function fetchNews() {
     try {
       const data = await fetchJson("/news");
-      const items = extractItems(data);
-      setNewsItems(items);
-      persistJsonArray(NEWS_CACHE_KEY, items);
-      setLastUpdated(new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+      setNewsItems(extractItems(data));
       return true;
     } catch (error) {
       console.error("fetchNews", error);
-      setNewsItems((prev) => (prev?.length ? prev : []));
+      setNewsItems([]);
       return false;
     }
   }
@@ -555,6 +531,8 @@ export default function App() {
       changePercent: item?.changePercent ?? null,
       nxt: item?.nxt ?? null,
       extended: item?.extended ?? null,
+      asOf: item?.asOf ?? null,
+      stale: item?.stale ?? false,
     };
   }
 
@@ -614,22 +592,14 @@ export default function App() {
     });
   }
 
-  async function refreshList(items, setter, storageKey, nxtCache = {}, shouldRefresh = () => true) {
+  async function refreshList(items, setter, storageKey, nxtCache = {}) {
     if (!items.length) return true;
 
     const updated = await Promise.all(
       items.map(async (item) => {
+        const fresh = await fetchSingleStockQuote(item.ticker);
         const tickerKey = normalizeTicker(item.ticker).split(".")[0];
         const cachedNxt = nxtCache?.[tickerKey] || nxtCache?.[normalizeTicker(item.ticker)] || null;
-
-        if (!shouldRefresh(item)) {
-          return {
-            ...item,
-            nxt: item?.nxt ?? cachedNxt,
-          };
-        }
-
-        const fresh = await fetchSingleStockQuote(item.ticker);
         if (fresh && fresh.price != null) {
           return {
             ...item,
@@ -638,6 +608,8 @@ export default function App() {
             name: fresh.name || item.name,
             nxt: fresh.nxt ?? cachedNxt,
             extended: fresh.extended ?? item?.extended ?? null,
+            asOf: fresh.asOf ?? item?.asOf ?? null,
+            stale: fresh.stale ?? false,
           };
         }
         return {
@@ -654,7 +626,7 @@ export default function App() {
     return true;
   }
 
-  async function refreshHoldings(shouldRefresh = () => true) {
+  async function refreshHoldings() {
     if (Date.now() < holdRefreshPauseUntilRef.current) return true;
 
     const items = holdingsRef.current;
@@ -664,10 +636,6 @@ export default function App() {
 
     const updated = await Promise.all(
       items.map(async (item) => {
-        if (!shouldRefresh(item)) {
-          return item;
-        }
-
         const fresh = await fetchSingleStockQuote(item.ticker);
         if (fresh && fresh.price != null) {
           return {
@@ -693,58 +661,42 @@ export default function App() {
     return true;
   }
 
-  async function refreshDefaultStocks(nxtCache = {}, shouldRefresh = () => true) {
-    await refreshList(stockItemsRef.current, setStockItems, DEFAULT_STOCKS_KEY, nxtCache, shouldRefresh);
+  async function refreshDefaultStocks(nxtCache = {}) {
+    await refreshList(stockItemsRef.current, setStockItems, DEFAULT_STOCKS_KEY, nxtCache);
   }
 
-  async function refreshExtraStocks(nxtCache = {}, shouldRefresh = () => true) {
-    await refreshList(extraStocksRef.current, setExtraStocks, EXTRA_STOCKS_KEY, nxtCache, shouldRefresh);
+  async function refreshExtraStocks(nxtCache = {}) {
+    await refreshList(extraStocksRef.current, setExtraStocks, EXTRA_STOCKS_KEY, nxtCache);
   }
 
-  async function refreshMarketAndNews() {
-    setErrorText("");
-    const results = await Promise.allSettled([fetchMarket(), fetchNews()]);
-    const okCount = results.filter((result) => result.status === "fulfilled" && result.value).length;
-    if (okCount === 0) {
-      setErrorText("데이터 연결 실패");
-    }
-    setLastUpdated(
-      new Date().toLocaleTimeString("ko-KR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      })
-    );
-    return okCount > 0;
-  }
-
-  async function refreshNonRealtimeData() {
-    const nxtCache = await fetchNxtCache();
-    const shouldRefresh = (item) => !isKoreanRealtimeTicker(item?.ticker);
-    await Promise.allSettled([
-      refreshDefaultStocks(nxtCache, shouldRefresh),
-      refreshExtraStocks(nxtCache, shouldRefresh),
-      refreshHoldings(shouldRefresh),
-    ]);
-  }
-
-  function applyLiveQuotes(items) {
+  function applyLiveQuotes(items, wsTs) {
     if (!Array.isArray(items) || !items.length) return;
 
     const patchMap = new Map(
       items
         .filter((item) => item?.ticker)
-        .map((item) => [normalizeTicker(item.ticker), item])
+        .map((item) => [normalizeTicker(item.ticker), { ...item, _wsTs: item?.asOf || wsTs || null }])
     );
 
     if (!patchMap.size) return;
 
+    const shouldUsePatch = (prevItem, patch) => {
+      if (!patch) return false;
+      const patchTs = Date.parse(patch?._wsTs || patch?.asOf || "") || 0;
+      const prevTs = Date.parse(prevItem?._wsTs || prevItem?.asOf || "") || 0;
+      if (patch.source === "kis_ws") return patchTs >= prevTs;
+      return patchTs >= prevTs;
+    };
+
     const mergeOne = (prev) => prev.map((item) => {
       const patch = patchMap.get(normalizeTicker(item.ticker));
-      if (!patch) return item;
+      if (!patch || !shouldUsePatch(item, patch)) return item;
       return {
         ...item,
         ...patch,
+        _wsTs: patch._wsTs,
+        asOf: patch.asOf || patch._wsTs || item.asOf || null,
+        stale: patch.stale ?? false,
         name: patch.name || item.name,
         nxt: patch.nxt ?? item.nxt ?? null,
         extended: patch.extended ?? item.extended ?? null,
@@ -768,9 +720,13 @@ export default function App() {
     setHoldings((prev) => {
       const next = prev.map((item) => {
         const patch = patchMap.get(normalizeTicker(item.ticker));
-        if (!patch) return item;
+        if (!patch || !shouldUsePatch(item, patch)) return item;
         return {
           ...item,
+          ...patch,
+          _wsTs: patch._wsTs,
+          asOf: patch.asOf || patch._wsTs || item.asOf || null,
+          stale: patch.stale ?? false,
           name: patch.name || item.name,
           price: patch.price ?? item.price,
           change: patch.change ?? item.change,
@@ -793,31 +749,84 @@ export default function App() {
     );
   }
 
+  async function refreshNonRealtimeStocks() {
+    const onlyForeignOrNonRealtime = (items) => items.filter((item) => !isKoreanTicker(item?.ticker));
+
+    await refreshList(onlyForeignOrNonRealtime(stockItemsRef.current), (updatedSubset) => {
+      setStockItems((prev) => {
+        const patchMap = new Map(updatedSubset.map((item) => [normalizeTicker(item.ticker), item]));
+        const next = prev.map((item) => patchMap.get(normalizeTicker(item.ticker)) || item);
+        stockItemsRef.current = next;
+        persistItems(DEFAULT_STOCKS_KEY, next);
+        return next;
+      });
+    }, DEFAULT_STOCKS_KEY, {});
+
+    await refreshList(onlyForeignOrNonRealtime(extraStocksRef.current), (updatedSubset) => {
+      setExtraStocks((prev) => {
+        const patchMap = new Map(updatedSubset.map((item) => [normalizeTicker(item.ticker), item]));
+        const next = prev.map((item) => patchMap.get(normalizeTicker(item.ticker)) || item);
+        extraStocksRef.current = next;
+        persistItems(EXTRA_STOCKS_KEY, next);
+        return next;
+      });
+    }, EXTRA_STOCKS_KEY, {});
+
+    const foreignHoldings = holdingsRef.current.filter((item) => !isKoreanTicker(item?.ticker));
+    if (foreignHoldings.length) {
+      const updated = await Promise.all(
+        foreignHoldings.map(async (item) => {
+          const fresh = await fetchSingleStockQuote(item.ticker);
+          return fresh && fresh.price != null
+            ? {
+                ...item,
+                name: fresh.name || item.name,
+                price: fresh.price,
+                change: fresh.change,
+                changePercent: fresh.changePercent,
+                nxt: fresh.nxt ?? item.nxt ?? null,
+                extended: fresh.extended ?? item.extended ?? null,
+                asOf: fresh.asOf ?? item.asOf ?? null,
+                stale: fresh.stale ?? false,
+              }
+            : item;
+        })
+      );
+      const patchMap = new Map(updated.map((item) => [normalizeTicker(item.ticker), item]));
+      setHoldings((prev) => {
+        const next = prev.map((item) => patchMap.get(normalizeTicker(item.ticker)) || item);
+        holdingsRef.current = next;
+        persistItems(HOLDINGS_KEY, next);
+        return next;
+      });
+    }
+  }
+
+  async function refreshAll() {
+    setErrorText("");
+
+    const okMarket = await fetchMarket();
+    const okNews = await fetchNews();
+    await refreshNonRealtimeStocks();
+
+    const successes = [okMarket, okNews].filter(Boolean).length;
+    if (successes === 0) {
+      setErrorText("데이터 연결 실패");
+    }
+
+    setLastUpdated(
+      new Date().toLocaleTimeString("ko-KR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    );
+  }
+
   useEffect(() => {
     fetchDefaultStocksFromBackend();
-  }, []);
-
-  useEffect(() => {
-    fetchMarket();
-    const timer = window.setInterval(() => {
-      fetchMarket();
-    }, LIGHT_REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    fetchNews();
-    const timer = window.setInterval(() => {
-      fetchNews();
-    }, LIGHT_REFRESH_MS);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
-    refreshNonRealtimeData();
-    const timer = window.setInterval(() => {
-      refreshNonRealtimeData();
-    }, LIGHT_REFRESH_MS);
+    refreshAll();
+    const timer = window.setInterval(refreshAll, LIGHT_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -827,12 +836,17 @@ export default function App() {
       const ticker = normalizeTicker(item?.ticker);
       if (ticker) merged.add(ticker);
     });
-    return Array.from(merged);
-  }, [stockItems, extraStocks, holdings]);
+    return Array.from(merged).sort();
+  }, [
+    stockItems.map((item) => normalizeTicker(item?.ticker)).sort().join("|"),
+    extraStocks.map((item) => normalizeTicker(item?.ticker)).sort().join("|"),
+    holdings.map((item) => normalizeTicker(item?.ticker)).sort().join("|")
+  ]);
+
+  const watchedTickersKey = useMemo(() => watchedTickers.join("|"), [watchedTickers]);
 
   useEffect(() => {
-    const serialized = JSON.stringify(watchedTickers);
-    watchedTickersRef.current = serialized;
+    watchedTickersRef.current = watchedTickersKey;
 
     try {
       if (liveSocketRef.current) {
@@ -853,7 +867,7 @@ export default function App() {
       try {
         const data = JSON.parse(event.data);
         if (data?.type === "quotes") {
-          applyLiveQuotes(Array.isArray(data?.items) ? data.items : []);
+          applyLiveQuotes(Array.isArray(data?.items) ? data.items : [], data?.ts);
         }
       } catch (error) {
         console.error("realtime parse", error);
@@ -869,7 +883,7 @@ export default function App() {
         socket.close();
       } catch {}
     };
-  }, [watchedTickers]);
+  }, [watchedTickersKey]);
 
   useEffect(() => {
     window.clearTimeout(searchTimerRef.current);

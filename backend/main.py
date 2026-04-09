@@ -43,10 +43,8 @@ YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
 KIS_EXECUTION_TR_ID = "H0STCNT0"
 KIS_SUBSCRIBE = "1"
 KIS_UNSUBSCRIBE = "2"
-KIS_WS_CACHE_TTL_SECONDS = 15
-MARKET_CACHE_TTL_SECONDS = 45
-NEWS_CACHE_TTL_SECONDS = 45
-
+KIS_WS_CACHE_TTL_SECONDS = 90
+LAST_GOOD_QUOTE_TTL_SECONDS = 600
 
 app = FastAPI(title="Stock Dashboard API")
 app.add_middleware(
@@ -170,10 +168,8 @@ _TOKEN_CACHE: dict[str, Any] = {"value": None, "expires_at": None}
 _APPROVAL_CACHE: dict[str, Any] = {"value": None, "expires_at": None}
 NXT_CACHE: dict[str, dict[str, Any]] = {}
 REALTIME_QUOTES_CACHE: dict[str, dict[str, Any]] = {}
+LAST_GOOD_QUOTES_CACHE: dict[str, dict[str, Any]] = {}
 _KIS_DISABLED_UNTIL: datetime | None = None
-_MARKET_CACHE: dict[str, Any] = {"items": [], "cached_at": None}
-_NEWS_CACHE: dict[str, Any] = {"items": [], "cached_at": None, "query": "증시"}
-
 
 
 def _strip_possible_isin_prefix(text: str) -> str:
@@ -611,10 +607,58 @@ def get_cached_realtime_quote(code: str) -> dict[str, Any] | None:
     ts = cached.get("_cached_at")
     if isinstance(ts, datetime) and datetime.now() - ts <= timedelta(seconds=KIS_WS_CACHE_TTL_SECONDS):
         payload = {key: value for key, value in cached.items() if not key.startswith("_")}
+        payload["asOf"] = ts.isoformat() if isinstance(ts, datetime) else None
         payload["nxt"] = build_nxt_payload(normalized, name=payload.get("name"))
+        payload["hasNxt"] = payload["nxt"] is not None and payload["nxt"].get("price") is not None
+        remember_last_good_quote(payload)
+        return payload
+    return None
+
+
+def remember_last_good_quote(payload: dict[str, Any]) -> dict[str, Any]:
+    ticker = normalize_search_input(str(payload.get("ticker") or "")).split(".")[0]
+    price = _to_float_or_none(payload.get("price"))
+    if ticker and price not in (None, 0):
+        LAST_GOOD_QUOTES_CACHE[ticker] = {**payload, "_cached_at": datetime.now()}
+    return payload
+
+
+def get_last_good_quote(code: str) -> dict[str, Any] | None:
+    ticker = normalize_search_input(code).split(".")[0]
+    cached = LAST_GOOD_QUOTES_CACHE.get(ticker)
+    if not cached:
+        return None
+    ts = cached.get("_cached_at")
+    if isinstance(ts, datetime) and datetime.now() - ts <= timedelta(seconds=LAST_GOOD_QUOTE_TTL_SECONDS):
+        payload = {key: value for key, value in cached.items() if not key.startswith("_")}
+        payload["stale"] = True
+        payload["source"] = payload.get("source") or "last_good"
+        payload["nxt"] = build_nxt_payload(ticker, name=payload.get("name"))
         payload["hasNxt"] = payload["nxt"] is not None and payload["nxt"].get("price") is not None
         return payload
     return None
+
+
+def get_korean_quote_strict(code: str, name: str | None = None) -> dict[str, Any]:
+    normalized = normalize_search_input(code).split(".")[0]
+    cached = get_cached_realtime_quote(normalized)
+    if cached and cached.get("price") not in (None, 0):
+        return remember_last_good_quote(cached)
+
+    try:
+        quote = get_kis_quote(normalized, name=name)
+        quote["ticker"] = normalized
+        quote["name"] = quote.get("name") or resolve_korean_name(normalized, name or normalized)
+        quote["source"] = "kis_rest"
+        quote["nxt"] = build_nxt_payload(normalized, name=quote.get("name"))
+        quote["hasNxt"] = quote["nxt"] is not None and quote["nxt"].get("price") is not None
+        return remember_last_good_quote(quote)
+    except Exception as exc:
+        stale = get_last_good_quote(normalized)
+        if stale:
+            stale["note"] = "실시간 갱신 지연 중, 마지막 정상값 유지"
+            return stale
+        raise exc
 
 
 def build_korean_fallback_quote(code: str, name: str | None = None) -> dict[str, Any]:
@@ -650,10 +694,7 @@ def get_quote_by_item(item: dict[str, Any]) -> dict[str, Any]:
     name = str(item.get("name") or ticker)
     if source == "kis":
         code = ticker.split(".")[0]
-        cached = get_cached_realtime_quote(code)
-        if cached:
-            return cached
-        return build_korean_fallback_quote(code, name=name)
+        return get_korean_quote_strict(code, name=name)
     return get_yf_quote_with_fallback(ticker, name=name)
 
 
@@ -663,10 +704,7 @@ def get_quote_for_input(ticker: str) -> dict[str, Any]:
     if item:
         return get_quote_by_item(item)
     if is_korean_code(normalized):
-        cached = get_cached_realtime_quote(normalized)
-        if cached:
-            return cached
-        return build_korean_fallback_quote(normalized, name=resolve_korean_name(normalized, normalized))
+        return get_korean_quote_strict(normalized, name=resolve_korean_name(normalized, normalized))
     if is_korean_ticker_with_suffix(normalized):
         base_code = normalized.split(".")[0]
         return get_yf_quote_with_fallback(normalized, name=resolve_korean_name(base_code, base_code))
@@ -782,7 +820,7 @@ class RealtimeHub:
 
     async def publish_loop(self) -> None:
         while True:
-            await asyncio.sleep(2)
+            await asyncio.sleep(0.5)
             if not self.connections:
                 continue
 
@@ -948,8 +986,10 @@ class KISRealtimeManager:
             if payloads:
                 now = datetime.now()
                 for payload in payloads:
-                    REALTIME_QUOTES_CACHE[payload["ticker"]] = {**payload, "_cached_at": now}
-                await REALTIME_HUB.broadcast_items(payloads)
+                    enriched = {**payload, "_cached_at": now, "asOf": now.isoformat()}
+                    REALTIME_QUOTES_CACHE[payload["ticker"]] = enriched
+                    remember_last_good_quote(enriched)
+                await REALTIME_HUB.broadcast_items([{**p, "asOf": now.isoformat()} for p in payloads])
             return
 
         print("kis realtime raw:", text[:200])
@@ -964,85 +1004,6 @@ async def sync_kis_realtime_subscriptions() -> None:
     await KIS_REALTIME.update_tickers(wanted)
 
 
-def _cache_age_seconds(cached_at: Any) -> float | None:
-    if isinstance(cached_at, datetime):
-        return max(0.0, (datetime.now() - cached_at).total_seconds())
-    return None
-
-
-def get_market_items_cached(force: bool = False) -> list[dict[str, Any]]:
-    cached_at = _MARKET_CACHE.get("cached_at")
-    cache_age = _cache_age_seconds(cached_at)
-    if not force and cache_age is not None and cache_age <= MARKET_CACHE_TTL_SECONDS and _MARKET_CACHE.get("items"):
-        return list(_MARKET_CACHE["items"])
-
-    items: list[dict[str, Any]] = []
-    previous_map = {str(item.get("key")): item for item in (_MARKET_CACHE.get("items") or []) if item.get("key")}
-    for key, ticker in INDEX_TICKERS.items():
-        try:
-            quote = get_yf_quote(ticker, INDEX_LABELS.get(key, key))
-        except Exception:
-            quote = previous_map.get(key) or {
-                "name": INDEX_LABELS.get(key, key),
-                "ticker": ticker,
-                "price": None,
-                "change": None,
-                "changePercent": None,
-            }
-        quote["key"] = key
-        quote.pop("extended", None)
-        quote.pop("hasExtended", None)
-        items.append(quote)
-
-    items.sort(key=lambda item: INDEX_ORDER.index(item["key"]) if item.get("key") in INDEX_ORDER else 999)
-    _MARKET_CACHE["items"] = items
-    _MARKET_CACHE["cached_at"] = datetime.now()
-    return list(items)
-
-
-def get_news_items_cached(query: str = "증시", force: bool = False) -> list[dict[str, Any]]:
-    query = (query or "증시").strip() or "증시"
-    cached_at = _NEWS_CACHE.get("cached_at")
-    cache_age = _cache_age_seconds(cached_at)
-    same_query = _NEWS_CACHE.get("query") == query
-    if not force and same_query and cache_age is not None and cache_age <= NEWS_CACHE_TTL_SECONDS and _NEWS_CACHE.get("items"):
-        return list(_NEWS_CACHE["items"])
-
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        _NEWS_CACHE["items"] = []
-        _NEWS_CACHE["cached_at"] = datetime.now()
-        _NEWS_CACHE["query"] = query
-        return []
-
-    queries = [query]
-    if query == "증시":
-        queries = ["증시", "주식", "코스피", "나스닥"]
-
-    merged: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    previous_items = list(_NEWS_CACHE.get("items") or []) if same_query else []
-    for one_query in queries:
-        try:
-            for item in fetch_naver_news_once(one_query, display=6):
-                key = item.get("link") or item.get("title")
-                if key in seen:
-                    continue
-                seen.add(key)
-                merged.append(item)
-                if len(merged) >= 12:
-                    break
-            if len(merged) >= 12:
-                break
-        except Exception as exc:
-            print(f"news fetch error ({one_query}):", exc)
-
-    final_items = merged[:10] if merged else previous_items[:10]
-    _NEWS_CACHE["items"] = final_items
-    _NEWS_CACHE["cached_at"] = datetime.now()
-    _NEWS_CACHE["query"] = query
-    return list(final_items)
-
-
 @app.get("/")
 def root():
     return {"message": "ok"}
@@ -1050,24 +1011,23 @@ def root():
 
 @app.get("/health")
 def health():
-    market_cached_at = _MARKET_CACHE.get("cached_at")
-    news_cached_at = _NEWS_CACHE.get("cached_at")
-    return {
-        "ok": True,
-        "service": "stock-dashboard-api",
-        "time": datetime.now().isoformat(),
-        "kis_available": kis_available(),
-        "market_cache_age_seconds": _cache_age_seconds(market_cached_at),
-        "news_cache_age_seconds": _cache_age_seconds(news_cached_at),
-        "market_items": len(_MARKET_CACHE.get("items") or []),
-        "news_items": len(_NEWS_CACHE.get("items") or []),
-        "realtime_clients": len(REALTIME_HUB.connections),
-    }
+    return {"ok": True, "service": "stock-dashboard-api"}
 
 
 @app.get("/market")
 def market():
-    return {"items": get_market_items_cached()}
+    items = []
+    for key, ticker in INDEX_TICKERS.items():
+        try:
+            quote = get_yf_quote(ticker, INDEX_LABELS.get(key, key))
+        except Exception:
+            quote = {"name": INDEX_LABELS.get(key, key), "ticker": ticker, "price": None, "change": None, "changePercent": None}
+        quote["key"] = key
+        quote.pop("extended", None)
+        quote.pop("hasExtended", None)
+        items.append(quote)
+    items.sort(key=lambda item: INDEX_ORDER.index(item["key"]) if item.get("key") in INDEX_ORDER else 999)
+    return {"items": items}
 
 
 @app.get("/stocks")
@@ -1117,7 +1077,31 @@ def chart(ticker: str, period: str = Query(default="1mo")):
 
 @app.get("/news")
 def news(q: str = Query(default="증시")):
-    return {"items": get_news_items_cached(query=q)}
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        return {"items": []}
+
+    queries = [q]
+    if q == "증시":
+        queries = ["증시", "주식", "코스피", "나스닥"]
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for one_query in queries:
+        try:
+            for item in fetch_naver_news_once(one_query, display=6):
+                key = item.get("link") or item.get("title")
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+                if len(merged) >= 12:
+                    break
+            if len(merged) >= 12:
+                break
+        except Exception as exc:
+            print(f"news fetch error ({one_query}):", exc)
+
+    return {"items": merged[:10]}
 
 
 @app.get("/search-stock")
@@ -1202,20 +1186,6 @@ async def startup_event():
     await KIS_REALTIME.ensure_running()
     if REALTIME_HUB.task is None:
         REALTIME_HUB.task = asyncio.create_task(REALTIME_HUB.publish_loop())
-
-    async def warm_caches() -> None:
-        for _ in range(2):
-            try:
-                await asyncio.to_thread(get_market_items_cached, True)
-            except Exception as exc:
-                print("startup market warmup error:", exc)
-            try:
-                await asyncio.to_thread(get_news_items_cached, "증시", True)
-            except Exception as exc:
-                print("startup news warmup error:", exc)
-            await asyncio.sleep(0.1)
-
-    asyncio.create_task(warm_caches())
 
 
 @app.on_event("shutdown")
