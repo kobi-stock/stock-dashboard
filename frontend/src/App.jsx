@@ -12,14 +12,20 @@ const API_HOST =
 const API_BASE =
   import.meta.env.VITE_API_BASE ||
   `${window.location.protocol}//${API_HOST}:8000`;
-const REFRESH_MS = 15000;
+const LIGHT_REFRESH_MS = 30000;
 const WS_BASE = API_BASE.replace(/^http/i, "ws");
 const EXTRA_STOCKS_KEY = "extraStocks";
 const DEFAULT_STOCKS_KEY = "defaultStocks";
 const HOLDINGS_KEY = "investmentHoldings";
+const MARKET_CACHE_KEY = "marketItemsCache";
+const NEWS_CACHE_KEY = "newsItemsCache";
 
 function normalizeTicker(ticker) {
   return String(ticker || "").trim().toUpperCase();
+}
+
+function isKoreanRealtimeTicker(ticker) {
+  return /^\d{6}$/.test(normalizeTicker(ticker).split(".")[0]);
 }
 
 function toNumber(value) {
@@ -74,6 +80,26 @@ function loadSavedItems(key, type = "stocks") {
 }
 
 function persistItems(key, items) {
+  try {
+    const safeItems = Array.isArray(items) ? items : [];
+    const raw = JSON.stringify(safeItems);
+    localStorage.setItem(key, raw);
+    sessionStorage.setItem(key, raw);
+  } catch {}
+}
+
+
+function loadJsonArray(key) {
+  try {
+    const raw = localStorage.getItem(key) || sessionStorage.getItem(key);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistJsonArray(key, items) {
   try {
     const safeItems = Array.isArray(items) ? items : [];
     const raw = JSON.stringify(safeItems);
@@ -367,9 +393,9 @@ function LineChart({ data = [] }) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("stocks");
-  const [marketItems, setMarketItems] = useState([]);
+  const [marketItems, setMarketItems] = useState(loadJsonArray(MARKET_CACHE_KEY));
   const [stockItems, setStockItems] = useState(loadSavedItems(DEFAULT_STOCKS_KEY));
-  const [newsItems, setNewsItems] = useState([]);
+  const [newsItems, setNewsItems] = useState(loadJsonArray(NEWS_CACHE_KEY));
   const [extraStocks, setExtraStocks] = useState(loadSavedItems(EXTRA_STOCKS_KEY));
   const [holdings, setHoldings] = useState(loadSavedItems(HOLDINGS_KEY, "holdings"));
   const [searchKeyword, setSearchKeyword] = useState("");
@@ -457,11 +483,14 @@ export default function App() {
   async function fetchMarket() {
     try {
       const data = await fetchJson("/market");
-      setMarketItems(extractItems(data));
+      const items = extractItems(data);
+      setMarketItems(items);
+      persistJsonArray(MARKET_CACHE_KEY, items);
+      setLastUpdated(new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
       return true;
     } catch (error) {
       console.error("fetchMarket", error);
-      setMarketItems([]);
+      setMarketItems((prev) => (prev?.length ? prev : []));
       return false;
     }
   }
@@ -487,11 +516,14 @@ export default function App() {
   async function fetchNews() {
     try {
       const data = await fetchJson("/news");
-      setNewsItems(extractItems(data));
+      const items = extractItems(data);
+      setNewsItems(items);
+      persistJsonArray(NEWS_CACHE_KEY, items);
+      setLastUpdated(new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
       return true;
     } catch (error) {
       console.error("fetchNews", error);
-      setNewsItems([]);
+      setNewsItems((prev) => (prev?.length ? prev : []));
       return false;
     }
   }
@@ -582,14 +614,22 @@ export default function App() {
     });
   }
 
-  async function refreshList(items, setter, storageKey, nxtCache = {}) {
+  async function refreshList(items, setter, storageKey, nxtCache = {}, shouldRefresh = () => true) {
     if (!items.length) return true;
 
     const updated = await Promise.all(
       items.map(async (item) => {
-        const fresh = await fetchSingleStockQuote(item.ticker);
         const tickerKey = normalizeTicker(item.ticker).split(".")[0];
         const cachedNxt = nxtCache?.[tickerKey] || nxtCache?.[normalizeTicker(item.ticker)] || null;
+
+        if (!shouldRefresh(item)) {
+          return {
+            ...item,
+            nxt: item?.nxt ?? cachedNxt,
+          };
+        }
+
+        const fresh = await fetchSingleStockQuote(item.ticker);
         if (fresh && fresh.price != null) {
           return {
             ...item,
@@ -614,7 +654,7 @@ export default function App() {
     return true;
   }
 
-  async function refreshHoldings() {
+  async function refreshHoldings(shouldRefresh = () => true) {
     if (Date.now() < holdRefreshPauseUntilRef.current) return true;
 
     const items = holdingsRef.current;
@@ -624,6 +664,10 @@ export default function App() {
 
     const updated = await Promise.all(
       items.map(async (item) => {
+        if (!shouldRefresh(item)) {
+          return item;
+        }
+
         const fresh = await fetchSingleStockQuote(item.ticker);
         if (fresh && fresh.price != null) {
           return {
@@ -649,12 +693,39 @@ export default function App() {
     return true;
   }
 
-  async function refreshDefaultStocks(nxtCache = {}) {
-    await refreshList(stockItemsRef.current, setStockItems, DEFAULT_STOCKS_KEY, nxtCache);
+  async function refreshDefaultStocks(nxtCache = {}, shouldRefresh = () => true) {
+    await refreshList(stockItemsRef.current, setStockItems, DEFAULT_STOCKS_KEY, nxtCache, shouldRefresh);
   }
 
-  async function refreshExtraStocks(nxtCache = {}) {
-    await refreshList(extraStocksRef.current, setExtraStocks, EXTRA_STOCKS_KEY, nxtCache);
+  async function refreshExtraStocks(nxtCache = {}, shouldRefresh = () => true) {
+    await refreshList(extraStocksRef.current, setExtraStocks, EXTRA_STOCKS_KEY, nxtCache, shouldRefresh);
+  }
+
+  async function refreshMarketAndNews() {
+    setErrorText("");
+    const results = await Promise.allSettled([fetchMarket(), fetchNews()]);
+    const okCount = results.filter((result) => result.status === "fulfilled" && result.value).length;
+    if (okCount === 0) {
+      setErrorText("데이터 연결 실패");
+    }
+    setLastUpdated(
+      new Date().toLocaleTimeString("ko-KR", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    );
+    return okCount > 0;
+  }
+
+  async function refreshNonRealtimeData() {
+    const nxtCache = await fetchNxtCache();
+    const shouldRefresh = (item) => !isKoreanRealtimeTicker(item?.ticker);
+    await Promise.allSettled([
+      refreshDefaultStocks(nxtCache, shouldRefresh),
+      refreshExtraStocks(nxtCache, shouldRefresh),
+      refreshHoldings(shouldRefresh),
+    ]);
   }
 
   function applyLiveQuotes(items) {
@@ -722,37 +793,31 @@ export default function App() {
     );
   }
 
-  async function refreshAll() {
-    setErrorText("");
-
-    const nxtCache = await fetchNxtCache();
-    const okMarket = await fetchMarket();
-    const okNews = await fetchNews();
-    const okDefault = await refreshDefaultStocks(nxtCache);
-    const okExtra = await refreshExtraStocks(nxtCache);
-    const okHoldings = await refreshHoldings();
-
-    const successes = [okMarket, okNews, okDefault, okExtra, okHoldings].filter(Boolean).length;
-    if (successes === 0) {
-      setErrorText("데이터 연결 실패");
-    }
-
-    setLastUpdated(
-      new Date().toLocaleTimeString("ko-KR", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      })
-    );
-  }
-
   useEffect(() => {
     fetchDefaultStocksFromBackend();
   }, []);
 
   useEffect(() => {
-    refreshAll();
-    const timer = window.setInterval(refreshAll, REFRESH_MS);
+    fetchMarket();
+    const timer = window.setInterval(() => {
+      fetchMarket();
+    }, LIGHT_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    fetchNews();
+    const timer = window.setInterval(() => {
+      fetchNews();
+    }, LIGHT_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    refreshNonRealtimeData();
+    const timer = window.setInterval(() => {
+      refreshNonRealtimeData();
+    }, LIGHT_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, []);
 

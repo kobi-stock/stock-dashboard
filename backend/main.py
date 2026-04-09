@@ -44,6 +44,9 @@ KIS_EXECUTION_TR_ID = "H0STCNT0"
 KIS_SUBSCRIBE = "1"
 KIS_UNSUBSCRIBE = "2"
 KIS_WS_CACHE_TTL_SECONDS = 15
+MARKET_CACHE_TTL_SECONDS = 45
+NEWS_CACHE_TTL_SECONDS = 45
+
 
 app = FastAPI(title="Stock Dashboard API")
 app.add_middleware(
@@ -168,6 +171,9 @@ _APPROVAL_CACHE: dict[str, Any] = {"value": None, "expires_at": None}
 NXT_CACHE: dict[str, dict[str, Any]] = {}
 REALTIME_QUOTES_CACHE: dict[str, dict[str, Any]] = {}
 _KIS_DISABLED_UNTIL: datetime | None = None
+_MARKET_CACHE: dict[str, Any] = {"items": [], "cached_at": None}
+_NEWS_CACHE: dict[str, Any] = {"items": [], "cached_at": None, "query": "증시"}
+
 
 
 def _strip_possible_isin_prefix(text: str) -> str:
@@ -958,25 +964,110 @@ async def sync_kis_realtime_subscriptions() -> None:
     await KIS_REALTIME.update_tickers(wanted)
 
 
+def _cache_age_seconds(cached_at: Any) -> float | None:
+    if isinstance(cached_at, datetime):
+        return max(0.0, (datetime.now() - cached_at).total_seconds())
+    return None
+
+
+def get_market_items_cached(force: bool = False) -> list[dict[str, Any]]:
+    cached_at = _MARKET_CACHE.get("cached_at")
+    cache_age = _cache_age_seconds(cached_at)
+    if not force and cache_age is not None and cache_age <= MARKET_CACHE_TTL_SECONDS and _MARKET_CACHE.get("items"):
+        return list(_MARKET_CACHE["items"])
+
+    items: list[dict[str, Any]] = []
+    previous_map = {str(item.get("key")): item for item in (_MARKET_CACHE.get("items") or []) if item.get("key")}
+    for key, ticker in INDEX_TICKERS.items():
+        try:
+            quote = get_yf_quote(ticker, INDEX_LABELS.get(key, key))
+        except Exception:
+            quote = previous_map.get(key) or {
+                "name": INDEX_LABELS.get(key, key),
+                "ticker": ticker,
+                "price": None,
+                "change": None,
+                "changePercent": None,
+            }
+        quote["key"] = key
+        quote.pop("extended", None)
+        quote.pop("hasExtended", None)
+        items.append(quote)
+
+    items.sort(key=lambda item: INDEX_ORDER.index(item["key"]) if item.get("key") in INDEX_ORDER else 999)
+    _MARKET_CACHE["items"] = items
+    _MARKET_CACHE["cached_at"] = datetime.now()
+    return list(items)
+
+
+def get_news_items_cached(query: str = "증시", force: bool = False) -> list[dict[str, Any]]:
+    query = (query or "증시").strip() or "증시"
+    cached_at = _NEWS_CACHE.get("cached_at")
+    cache_age = _cache_age_seconds(cached_at)
+    same_query = _NEWS_CACHE.get("query") == query
+    if not force and same_query and cache_age is not None and cache_age <= NEWS_CACHE_TTL_SECONDS and _NEWS_CACHE.get("items"):
+        return list(_NEWS_CACHE["items"])
+
+    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
+        _NEWS_CACHE["items"] = []
+        _NEWS_CACHE["cached_at"] = datetime.now()
+        _NEWS_CACHE["query"] = query
+        return []
+
+    queries = [query]
+    if query == "증시":
+        queries = ["증시", "주식", "코스피", "나스닥"]
+
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    previous_items = list(_NEWS_CACHE.get("items") or []) if same_query else []
+    for one_query in queries:
+        try:
+            for item in fetch_naver_news_once(one_query, display=6):
+                key = item.get("link") or item.get("title")
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(item)
+                if len(merged) >= 12:
+                    break
+            if len(merged) >= 12:
+                break
+        except Exception as exc:
+            print(f"news fetch error ({one_query}):", exc)
+
+    final_items = merged[:10] if merged else previous_items[:10]
+    _NEWS_CACHE["items"] = final_items
+    _NEWS_CACHE["cached_at"] = datetime.now()
+    _NEWS_CACHE["query"] = query
+    return list(final_items)
+
+
 @app.get("/")
 def root():
     return {"message": "ok"}
 
 
+@app.get("/health")
+def health():
+    market_cached_at = _MARKET_CACHE.get("cached_at")
+    news_cached_at = _NEWS_CACHE.get("cached_at")
+    return {
+        "ok": True,
+        "service": "stock-dashboard-api",
+        "time": datetime.now().isoformat(),
+        "kis_available": kis_available(),
+        "market_cache_age_seconds": _cache_age_seconds(market_cached_at),
+        "news_cache_age_seconds": _cache_age_seconds(news_cached_at),
+        "market_items": len(_MARKET_CACHE.get("items") or []),
+        "news_items": len(_NEWS_CACHE.get("items") or []),
+        "realtime_clients": len(REALTIME_HUB.connections),
+    }
+
+
 @app.get("/market")
 def market():
-    items = []
-    for key, ticker in INDEX_TICKERS.items():
-        try:
-            quote = get_yf_quote(ticker, INDEX_LABELS.get(key, key))
-        except Exception:
-            quote = {"name": INDEX_LABELS.get(key, key), "ticker": ticker, "price": None, "change": None, "changePercent": None}
-        quote["key"] = key
-        quote.pop("extended", None)
-        quote.pop("hasExtended", None)
-        items.append(quote)
-    items.sort(key=lambda item: INDEX_ORDER.index(item["key"]) if item.get("key") in INDEX_ORDER else 999)
-    return {"items": items}
+    return {"items": get_market_items_cached()}
 
 
 @app.get("/stocks")
@@ -1026,31 +1117,7 @@ def chart(ticker: str, period: str = Query(default="1mo")):
 
 @app.get("/news")
 def news(q: str = Query(default="증시")):
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        return {"items": []}
-
-    queries = [q]
-    if q == "증시":
-        queries = ["증시", "주식", "코스피", "나스닥"]
-
-    merged: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for one_query in queries:
-        try:
-            for item in fetch_naver_news_once(one_query, display=6):
-                key = item.get("link") or item.get("title")
-                if key in seen:
-                    continue
-                seen.add(key)
-                merged.append(item)
-                if len(merged) >= 12:
-                    break
-            if len(merged) >= 12:
-                break
-        except Exception as exc:
-            print(f"news fetch error ({one_query}):", exc)
-
-    return {"items": merged[:10]}
+    return {"items": get_news_items_cached(query=q)}
 
 
 @app.get("/search-stock")
@@ -1135,6 +1202,20 @@ async def startup_event():
     await KIS_REALTIME.ensure_running()
     if REALTIME_HUB.task is None:
         REALTIME_HUB.task = asyncio.create_task(REALTIME_HUB.publish_loop())
+
+    async def warm_caches() -> None:
+        for _ in range(2):
+            try:
+                await asyncio.to_thread(get_market_items_cached, True)
+            except Exception as exc:
+                print("startup market warmup error:", exc)
+            try:
+                await asyncio.to_thread(get_news_items_cached, "증시", True)
+            except Exception as exc:
+                print("startup news warmup error:", exc)
+            await asyncio.sleep(0.1)
+
+    asyncio.create_task(warm_caches())
 
 
 @app.on_event("shutdown")
