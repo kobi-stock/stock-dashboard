@@ -1171,31 +1171,51 @@ def get_korean_index_from_naver(index_type: str) -> dict[str, Any] | None:
         response.raise_for_status()
         html = response.text
 
-        dd_texts = re.findall(r"<dd[^>]*>(.*?)</dd>", html, flags=re.IGNORECASE | re.DOTALL)
-        cleaned: list[str] = []
-        for raw in dd_texts:
-            text = re.sub(r"<[^>]+>", " ", raw)
-            text = unescape(text)
-            text = re.sub(r"\s+", " ", text).strip()
-            if text:
-                cleaned.append(text)
-
         target_name = "코스피" if index_type == "KOSPI" else "코스닥"
-        target_line = next((text for text in cleaned if text.startswith(f"{target_name} 지수 ")), None)
-        if not target_line:
-            raise RuntimeError(f"{index_type} dd line missing")
 
-        match = re.search(
+        # 1) 전체 HTML을 텍스트로 평탄화해서 먼저 찾는다.
+        full_text = re.sub(r"<[^>]+>", " ", html)
+        full_text = unescape(full_text)
+        full_text = re.sub(r"\s+", " ", full_text).strip()
+
+        patterns = [
             rf"{target_name}\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(플러스|마이너스)\s*([\d,]+(?:\.\d+)?)\s*퍼센트",
-            target_line,
-        )
+            rf"{target_name}\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(플러스|마이너스)\s*([\d,]+(?:\.\d+)?)\s*퍼센트",
+        ]
+
+        match = None
+        for pattern in patterns:
+            match = re.search(pattern, full_text)
+            if match:
+                break
+
+        # 2) 혹시 HTML 안에 줄 단위로 더 잘 보이면 개별 라인도 다시 훑는다.
         if not match:
-            raise RuntimeError(f"{index_type} parse failed: {target_line}")
+            lines = []
+            for raw in re.split(r"</?(?:dd|dt|li|span|div|p|br)[^>]*>", html, flags=re.IGNORECASE):
+                line = re.sub(r"<[^>]+>", " ", raw)
+                line = unescape(line)
+                line = re.sub(r"\s+", " ", line).strip()
+                if line:
+                    lines.append(line)
+
+            for line in lines:
+                if target_name not in line:
+                    continue
+                for pattern in patterns:
+                    match = re.search(pattern, line)
+                    if match:
+                        break
+                if match:
+                    break
+
+        if not match:
+            raise RuntimeError(f"{index_type} text parse failed")
 
         price = float(match.group(1).replace(",", ""))
         direction = match.group(2)
-        signed_word = match.group(4)
         change = float(match.group(3).replace(",", ""))
+        signed_word = match.group(4)
         change_percent = float(match.group(5).replace(",", ""))
 
         is_down = direction == "하락" or signed_word == "마이너스"
@@ -1217,7 +1237,6 @@ def get_korean_index_from_naver(index_type: str) -> dict[str, Any] | None:
     except Exception as exc:
         print("naver index parse error:", index_type, exc)
         return None
-
 
 def _fetch_single_market_item(key: str, ticker: str) -> dict[str, Any]:
     try:
