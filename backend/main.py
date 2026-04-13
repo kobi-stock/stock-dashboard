@@ -1131,24 +1131,35 @@ def get_korean_index_from_naver(index_type: str) -> dict[str, Any] | None:
         response.raise_for_status()
         html = response.text
 
-        patterns = {
-            "KOSPI": r"코스피\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(?:상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(?:플러스|마이너스)\s*([\d,]+(?:\.\d+)?)\s*퍼센트",
-            "KOSDAQ": r"코스닥\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(?:상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(?:플러스|마이너스)\s*([\d,]+(?:\.\d+)?)\s*퍼센트",
-        }
-        pattern = patterns.get(index_type)
-        if not pattern:
-            return None
+        dd_texts = re.findall(r"<dd[^>]*>(.*?)</dd>", html, flags=re.IGNORECASE | re.DOTALL)
+        cleaned: list[str] = []
+        for raw in dd_texts:
+            text = re.sub(r"<[^>]+>", " ", raw)
+            text = unescape(text)
+            text = re.sub(r"\s+", " ", text).strip()
+            if text:
+                cleaned.append(text)
 
-        match = re.search(pattern, html)
+        target_name = "코스피" if index_type == "KOSPI" else "코스닥"
+        target_line = next((text for text in cleaned if text.startswith(f"{target_name} 지수 ")), None)
+        if not target_line:
+            raise RuntimeError(f"{index_type} dd line missing")
+
+        match = re.search(
+            rf"{target_name}\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(플러스|마이너스)\s*([\d,]+(?:\.\d+)?)\s*퍼센트",
+            target_line,
+        )
         if not match:
-            raise RuntimeError(f"{index_type} parse failed")
+            raise RuntimeError(f"{index_type} parse failed: {target_line}")
 
         price = float(match.group(1).replace(",", ""))
-        change = float(match.group(2).replace(",", ""))
-        change_percent = float(match.group(3).replace(",", ""))
+        direction = match.group(2)
+        signed_word = match.group(4)
+        change = float(match.group(3).replace(",", ""))
+        change_percent = float(match.group(5).replace(",", ""))
 
-        around = html[max(0, match.start() - 40): match.end() + 40]
-        if "하락" in around:
+        is_down = direction == "하락" or signed_word == "마이너스"
+        if is_down:
             change = -abs(change)
             change_percent = -abs(change_percent)
         else:
