@@ -1170,6 +1170,15 @@ def _normalize_text_for_parse(value: str) -> str:
 
 
 def get_korean_index_from_naver(index_type: str) -> dict[str, Any] | None:
+    def _safe_float(raw: str | None) -> float | None:
+        cleaned = str(raw or "").replace(",", "").strip()
+        if not cleaned:
+            return None
+        try:
+            return float(cleaned)
+        except Exception:
+            return None
+
     try:
         response = requests.get(
             "https://finance.naver.com/sise/",
@@ -1203,10 +1212,13 @@ def get_korean_index_from_naver(index_type: str) -> dict[str, Any] | None:
                 if not match:
                     continue
 
-                price = float(match.group(1).replace(",", ""))
+                price = _safe_float(match.group(1))
                 direction = match.group(2)
-                change = float(match.group(3).replace(",", ""))
-                change_percent = float(match.group(4).replace(",", ""))
+                change = _safe_float(match.group(3))
+                change_percent = _safe_float(match.group(4))
+
+                if price is None or change is None or change_percent is None:
+                    continue
 
                 if direction == "하락":
                     change = -abs(change)
@@ -1225,10 +1237,9 @@ def get_korean_index_from_naver(index_type: str) -> dict[str, Any] | None:
                 }
 
             numbers = re.findall(r"[\d,]+(?:\.\d+)?", text)
-            if len(numbers) >= 3:
-                price = float(numbers[0].replace(",", ""))
-                change = float(numbers[1].replace(",", ""))
-                change_percent = float(numbers[2].replace(",", ""))
+            parsed = [_safe_float(number) for number in numbers[:3]]
+            if len(parsed) >= 3 and all(value is not None for value in parsed):
+                price, change, change_percent = parsed
                 if "하락" in text or "마이너스" in text:
                     change = -abs(change)
                     change_percent = -abs(change_percent)
