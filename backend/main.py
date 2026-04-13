@@ -826,8 +826,12 @@ def get_cached_chart_items(ticker: str, period: str = "1mo") -> list[dict[str, A
 
 
 def prewarm_chart_cache() -> None:
+    """Warm only stock charts for the stable build.
+
+    Market charts are intentionally not prewarmed because index/commodity/fx chart
+    sources have been noisy and can trigger repeated Yahoo failures on Render.
+    """
     tickers = [item.get("ticker") for item in BASE_STOCKS if item.get("ticker")]
-    tickers.extend(["KOSPI", "NASDAQ", "WTI", "GOLD", "USDKRW"])
     deduped: list[str] = []
     seen: set[str] = set()
     for ticker in tickers:
@@ -837,15 +841,7 @@ def prewarm_chart_cache() -> None:
             deduped.append(normalized)
     for ticker in deduped:
         try:
-            if ticker in MARKET_CHART_FALLBACKS:
-                for one in MARKET_CHART_FALLBACKS[ticker]:
-                    items = get_cached_chart_items(one, "1mo")
-                    if items:
-                        break
-            elif ticker in INDEX_TICKERS:
-                get_cached_chart_items(str(INDEX_TICKERS[ticker]), "1mo")
-            else:
-                get_cached_chart_items(ticker, "1mo")
+            get_cached_chart_items(ticker, "1mo")
         except Exception as exc:
             print("chart prewarm error:", ticker, exc)
 
@@ -1119,8 +1115,6 @@ def _clone_items(items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return copy.deepcopy(items)
 
 
-
-
 def get_korean_index_from_naver(index_type: str) -> dict[str, Any] | None:
     try:
         response = requests.get(
@@ -1177,6 +1171,7 @@ def get_korean_index_from_naver(index_type: str) -> dict[str, Any] | None:
     except Exception as exc:
         print("naver index parse error:", index_type, exc)
         return None
+
 
 def _fetch_single_market_item(key: str, ticker: str) -> dict[str, Any]:
     try:

@@ -1232,8 +1232,6 @@ export default function App() {
                   <PriceCard
                     key={item.key}
                     item={item}
-                    onSelect={handleSelectMarketItem}
-                    selected={selectedMarketItem?.key === item.key}
                   />
                 )) : <div className="empty-box">표시할 선물 데이터가 없습니다.</div>}
               </div>
@@ -1244,8 +1242,6 @@ export default function App() {
                   <PriceCard
                     key={item.key}
                     item={item}
-                    onSelect={handleSelectMarketItem}
-                    selected={selectedMarketItem?.key === item.key}
                   />
                 )) : <div className="empty-box">표시할 지수 데이터가 없습니다.</div>}
               </div>
@@ -1276,39 +1272,13 @@ export default function App() {
                   <PriceCard
                     key={item.key}
                     item={item}
-                    onSelect={handleSelectMarketItem}
-                    selected={selectedMarketItem?.key === item.key}
                   />
                 )) : <div className="empty-box">표시할 환율 데이터가 없습니다.</div>}
               </div>
 
-              {selectedMarketItem ? (
-                <section className="chart-panel">
-                  <div className="chart-panel-head">
-                    <div>
-                      <div className="chart-title">{selectedMarketItem.name} 차트</div>
-                      <div className="chart-subtitle">{selectedMarketItem.key}</div>
-                    </div>
-                    <div className="period-tabs">
-                      {[
-                        ["1mo", "1M"],
-                        ["3mo", "3M"],
-                        ["6mo", "6M"],
-                      ].map(([value, label]) => (
-                        <button
-                          key={value}
-                          type="button"
-                          className={marketChartPeriod === value ? "period-btn active" : "period-btn"}
-                          onClick={() => setMarketChartPeriod(value)}
-                        >
-                          {label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  {marketChartLoading ? <div className="chart-empty">차트 불러오는 중...</div> : <LineChart data={marketChartItems} />}
-                </section>
-              ) : null}
+              <div className="empty-box" style={{ marginTop: 12 }}>
+                지수 / 원자재 / 환율 차트는 안정화 후 다시 추가할 예정입니다.
+              </div>
             </section>
           )}
 
