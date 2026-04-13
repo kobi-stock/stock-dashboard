@@ -1119,9 +1119,62 @@ def _clone_items(items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return copy.deepcopy(items)
 
 
+
+
+def get_korean_index_from_naver(index_type: str) -> dict[str, Any] | None:
+    try:
+        response = requests.get(
+            "https://finance.naver.com/sise/",
+            headers={"User-Agent": USER_AGENT},
+            timeout=10,
+        )
+        response.raise_for_status()
+        html = response.text
+
+        patterns = {
+            "KOSPI": r"코스피\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(?:상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(?:플러스|마이너스)\s*([\d,]+(?:\.\d+)?)\s*퍼센트",
+            "KOSDAQ": r"코스닥\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(?:상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(?:플러스|마이너스)\s*([\d,]+(?:\.\d+)?)\s*퍼센트",
+        }
+        pattern = patterns.get(index_type)
+        if not pattern:
+            return None
+
+        match = re.search(pattern, html)
+        if not match:
+            raise RuntimeError(f"{index_type} parse failed")
+
+        price = float(match.group(1).replace(",", ""))
+        change = float(match.group(2).replace(",", ""))
+        change_percent = float(match.group(3).replace(",", ""))
+
+        around = html[max(0, match.start() - 40): match.end() + 40]
+        if "하락" in around:
+            change = -abs(change)
+            change_percent = -abs(change_percent)
+        else:
+            change = abs(change)
+            change_percent = abs(change_percent)
+
+        return {
+            "name": INDEX_LABELS.get(index_type, index_type),
+            "ticker": INDEX_TICKERS.get(index_type, index_type),
+            "price": price,
+            "change": change,
+            "changePercent": change_percent,
+            "source": "naver_index",
+        }
+    except Exception as exc:
+        print("naver index parse error:", index_type, exc)
+        return None
+
 def _fetch_single_market_item(key: str, ticker: str) -> dict[str, Any]:
     try:
-        quote = get_yf_quote(ticker, INDEX_LABELS.get(key, key))
+        if key in {"KOSPI", "KOSDAQ"}:
+            quote = get_korean_index_from_naver(key)
+            if not quote:
+                quote = get_yf_quote(ticker, INDEX_LABELS.get(key, key))
+        else:
+            quote = get_yf_quote(ticker, INDEX_LABELS.get(key, key))
     except Exception as exc:
         print("market fetch error:", key, ticker, exc)
         quote = {"name": INDEX_LABELS.get(key, key), "ticker": ticker, "price": None, "change": None, "changePercent": None}
