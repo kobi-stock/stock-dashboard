@@ -399,6 +399,10 @@ export default function App() {
   const [chartPeriod, setChartPeriod] = useState("1mo");
   const [chartItems, setChartItems] = useState([]);
   const [chartLoading, setChartLoading] = useState(false);
+  const [selectedMarketItem, setSelectedMarketItem] = useState(null);
+  const [marketChartPeriod, setMarketChartPeriod] = useState("1mo");
+  const [marketChartItems, setMarketChartItems] = useState([]);
+  const [marketChartLoading, setMarketChartLoading] = useState(false);
   const [defaultEditMode, setDefaultEditMode] = useState(false);
 
   const stockItemsRef = useRef(stockItems);
@@ -410,6 +414,8 @@ export default function App() {
   const investSearchTimerRef = useRef(null);
   const refreshSeqRef = useRef({ holdings: 0 });
   const holdRefreshPauseUntilRef = useRef(0);
+  const stockChartRequestRef = useRef(0);
+  const marketChartRequestRef = useRef(0);
 
   useEffect(() => {
     stockItemsRef.current = stockItems;
@@ -1120,12 +1126,27 @@ export default function App() {
   async function handleSelectStock(item) {
     const same = selectedStock?.ticker === item.ticker;
     if (same) {
+      stockChartRequestRef.current += 1;
       setSelectedStock(null);
       setChartItems([]);
+      setChartLoading(false);
       return;
     }
     setSelectedStock(item);
     await fetchChart(item.ticker, chartPeriod);
+  }
+
+  async function handleSelectMarketItem(item) {
+    const same = selectedMarketItem?.key === item.key;
+    if (same) {
+      marketChartRequestRef.current += 1;
+      setSelectedMarketItem(null);
+      setMarketChartItems([]);
+      setMarketChartLoading(false);
+      return;
+    }
+    setSelectedMarketItem(item);
+    await fetchMarketChart(item.key, marketChartPeriod);
   }
 
   const futureIndexes = useMemo(
@@ -1208,14 +1229,24 @@ export default function App() {
               <h2 className="section-title">미국 선물</h2>
               <div className="card-grid">
                 {futureIndexes.length ? futureIndexes.map((item) => (
-                  <PriceCard key={item.key} item={item} />
+                  <PriceCard
+                    key={item.key}
+                    item={item}
+                    onSelect={handleSelectMarketItem}
+                    selected={selectedMarketItem?.key === item.key}
+                  />
                 )) : <div className="empty-box">표시할 선물 데이터가 없습니다.</div>}
               </div>
 
               <h2 className="section-title">주요 지수</h2>
               <div className="card-grid">
                 {mainIndexes.length ? mainIndexes.map((item) => (
-                  <PriceCard key={item.key} item={item} />
+                  <PriceCard
+                    key={item.key}
+                    item={item}
+                    onSelect={handleSelectMarketItem}
+                    selected={selectedMarketItem?.key === item.key}
+                  />
                 )) : <div className="empty-box">표시할 지수 데이터가 없습니다.</div>}
               </div>
 
@@ -1227,7 +1258,12 @@ export default function App() {
                     style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}
                   >
                     {row.map((item) => (
-                      <PriceCard key={item.key} item={item} />
+                      <PriceCard
+                        key={item.key}
+                        item={item}
+                        onSelect={handleSelectMarketItem}
+                        selected={selectedMarketItem?.key === item.key}
+                      />
                     ))}
                     {row.length === 1 ? <div /> : null}
                   </div>
@@ -1237,9 +1273,42 @@ export default function App() {
               <h2 className="section-title">환율</h2>
               <div className="card-grid">
                 {fxItems.length ? fxItems.map((item) => (
-                  <PriceCard key={item.key} item={item} />
+                  <PriceCard
+                    key={item.key}
+                    item={item}
+                    onSelect={handleSelectMarketItem}
+                    selected={selectedMarketItem?.key === item.key}
+                  />
                 )) : <div className="empty-box">표시할 환율 데이터가 없습니다.</div>}
               </div>
+
+              {selectedMarketItem ? (
+                <section className="chart-panel">
+                  <div className="chart-panel-head">
+                    <div>
+                      <div className="chart-title">{selectedMarketItem.name} 차트</div>
+                      <div className="chart-subtitle">{selectedMarketItem.key}</div>
+                    </div>
+                    <div className="period-tabs">
+                      {[
+                        ["1mo", "1M"],
+                        ["3mo", "3M"],
+                        ["6mo", "6M"],
+                      ].map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          className={marketChartPeriod === value ? "period-btn active" : "period-btn"}
+                          onClick={() => setMarketChartPeriod(value)}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {marketChartLoading ? <div className="chart-empty">차트 불러오는 중...</div> : <LineChart data={marketChartItems} />}
+                </section>
+              ) : null}
             </section>
           )}
 

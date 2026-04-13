@@ -88,16 +88,34 @@ INDEX_TICKERS = {
     "KOSDAQ": "^KQ11",
     "DOW": "^DJI",
     "NASDAQ": "^IXIC",
-    "DOW_FUT": "YM=F",
-    "NASDAQ_FUT": "NQ=F",
+    # 차트 안정성을 위해 선물 키도 지수로 fallback 가능하게 둠
+    "DOW_FUT": "^DJI",
+    "NASDAQ_FUT": "^IXIC",
     "WTI": "CL=F",
     "BRENT": "BZ=F",
     "GOLD": "GC=F",
     "SILVER": "SI=F",
     "COPPER": "HG=F",
-    "STEEL": "TIO=F",
+    "STEEL": "HRC=F",
     "USDKRW": "KRW=X",
     "JPYKRW": "JPYKRW=X",
+}
+
+MARKET_CHART_FALLBACKS = {
+    "DOW_FUT": ["^DJI", "YM=F"],
+    "NASDAQ_FUT": ["^IXIC", "NQ=F"],
+    "USDKRW": ["KRW=X", "USDKRW=X"],
+    "JPYKRW": ["JPYKRW=X"],
+    "WTI": ["CL=F"],
+    "BRENT": ["BZ=F"],
+    "GOLD": ["GC=F"],
+    "SILVER": ["SI=F"],
+    "COPPER": ["HG=F"],
+    "STEEL": ["HRC=F"],
+    "KOSPI": ["^KS11"],
+    "KOSDAQ": ["^KQ11"],
+    "DOW": ["^DJI"],
+    "NASDAQ": ["^IXIC"],
 }
 
 INDEX_LABELS = {
@@ -184,8 +202,10 @@ _KIS_DISABLED_UNTIL: datetime | None = None
 
 MARKET_CACHE_TTL_SECONDS = 45
 NEWS_CACHE_TTL_SECONDS = 45
+CHART_CACHE_TTL_SECONDS = 600
 _MARKET_CACHE: dict[str, Any] = {"items": None, "fetched_at": None}
 _NEWS_CACHE: dict[str, dict[str, Any]] = {}
+_CHART_CACHE: dict[str, dict[str, Any]] = {}
 _CACHE_LOCK = threading.Lock()
 
 
@@ -728,38 +748,106 @@ def get_quote_for_input(ticker: str) -> dict[str, Any]:
     return get_yf_quote_with_fallback(normalized, name=normalized)
 
 
+def _history_to_items(history: Any) -> list[dict[str, Any]]:
+    if history is None or getattr(history, "empty", True):
+        return []
+    items: list[dict[str, Any]] = []
+    for idx, row in history.iterrows():
+        try:
+            items.append(
+                {
+                    "date": idx.strftime("%Y-%m-%d"),
+                    "open": float(row["Open"]),
+                    "high": float(row["High"]),
+                    "low": float(row["Low"]),
+                    "close": float(row["Close"]),
+                    "volume": float(row["Volume"]),
+                }
+            )
+        except Exception:
+            continue
+    return items
+
+
 def fetch_yf_chart(normalized: str, period: str) -> list[dict[str, Any]]:
     attempts: list[str] = []
-    if is_korean_code(normalized):
+    if isinstance(normalized, str) and "|" in normalized:
+        attempts = [one for one in normalized.split("|") if one]
+    elif is_korean_code(normalized):
         attempts = [f"{normalized}.KS", f"{normalized}.KQ", normalized]
     else:
         attempts = [normalized]
 
     for one in attempts:
         try:
-            history = yf.Ticker(one).history(period=period, interval="1d", auto_adjust=False, prepost=True)
+            history = yf.Ticker(one).history(period=period, interval="1d", auto_adjust=False, prepost=False)
+            items = _history_to_items(history)
+            if items:
+                return items
+        except Exception:
+            pass
+
+        try:
+            history = yf.download(
+                one,
+                period=period,
+                interval="1d",
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+            )
+            items = _history_to_items(history)
+            if items:
+                return items
         except Exception:
             continue
-        if history is None or history.empty:
-            continue
-        items: list[dict[str, Any]] = []
-        for idx, row in history.iterrows():
-            try:
-                items.append(
-                    {
-                        "date": idx.strftime("%Y-%m-%d"),
-                        "open": float(row["Open"]),
-                        "high": float(row["High"]),
-                        "low": float(row["Low"]),
-                        "close": float(row["Close"]),
-                        "volume": float(row["Volume"]),
-                    }
-                )
-            except Exception:
-                continue
-        if items:
-            return items
+
     return []
+
+
+def get_cached_chart_items(ticker: str, period: str = "1mo") -> list[dict[str, Any]]:
+    normalized = normalize_chart_ticker(ticker)
+    cache_key = f"chart::{normalized}::{period}"
+    with _CACHE_LOCK:
+        entry = _CHART_CACHE.get(cache_key, {})
+        cached_at = entry.get("fetched_at")
+        cached_items = entry.get("items")
+        if _is_cache_fresh(cached_at, CHART_CACHE_TTL_SECONDS) and cached_items:
+            return _clone_items(cached_items)
+
+    items = fetch_yf_chart(normalized, period=period)
+
+    # 빈 차트는 캐시에 넣지 않음. 다음 요청에서 다시 시도.
+    if items:
+        with _CACHE_LOCK:
+            _CHART_CACHE[cache_key] = {"items": items, "fetched_at": datetime.now()}
+
+    return _clone_items(items)
+
+
+def prewarm_chart_cache() -> None:
+    tickers = [item.get("ticker") for item in BASE_STOCKS if item.get("ticker")]
+    tickers.extend(["KOSPI", "NASDAQ", "WTI", "GOLD", "USDKRW"])
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for ticker in tickers:
+        normalized = normalize_chart_ticker(str(ticker or ""))
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            deduped.append(normalized)
+    for ticker in deduped:
+        try:
+            if ticker in MARKET_CHART_FALLBACKS:
+                for one in MARKET_CHART_FALLBACKS[ticker]:
+                    items = get_cached_chart_items(one, "1mo")
+                    if items:
+                        break
+            elif ticker in INDEX_TICKERS:
+                get_cached_chart_items(str(INDEX_TICKERS[ticker]), "1mo")
+            else:
+                get_cached_chart_items(ticker, "1mo")
+        except Exception as exc:
+            print("chart prewarm error:", ticker, exc)
 
 
 def fetch_naver_news_once(query: str, display: int = 6) -> list[dict[str, Any]]:
@@ -1201,9 +1289,29 @@ def nxt_cache():
 def chart(ticker: str, period: str = Query(default="1mo")):
     normalized = normalize_chart_ticker(ticker)
     try:
-        return {"ticker": normalized, "requested": ticker, "items": fetch_yf_chart(normalized, period=period)}
+        return {"ticker": normalized, "requested": ticker, "items": get_cached_chart_items(normalized, period=period), "cached": True}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"chart error: {exc}") from exc
+
+
+@app.get("/market-chart/{key}")
+def market_chart(key: str, period: str = Query(default="1mo")):
+    normalized_key = normalize_search_input(key)
+    tickers = MARKET_CHART_FALLBACKS.get(normalized_key)
+    if not tickers:
+        yf_ticker = INDEX_TICKERS.get(normalized_key)
+        if not yf_ticker:
+            raise HTTPException(status_code=404, detail=f"market chart key not found: {key}")
+        tickers = [str(yf_ticker)]
+
+    try:
+        for one in tickers:
+            items = get_cached_chart_items(one, period=period)
+            if items:
+                return {"key": normalized_key, "ticker": one, "items": items, "cached": True}
+        return {"key": normalized_key, "ticker": tickers[0], "items": [], "cached": False}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"market chart error: {exc}") from exc
 
 
 @app.get("/news")
@@ -1318,6 +1426,7 @@ async def startup_event():
     if REALTIME_HUB.task is None:
         REALTIME_HUB.task = asyncio.create_task(REALTIME_HUB.publish_loop())
     asyncio.create_task(prewarm_light_data())
+    asyncio.create_task(asyncio.to_thread(prewarm_chart_cache))
 
 
 @app.on_event("shutdown")
