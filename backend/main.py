@@ -1161,79 +1161,91 @@ def _clone_items(items: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     return copy.deepcopy(items)
 
 
+
+def _normalize_text_for_parse(value: str) -> str:
+    value = unescape(value or "")
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
 def get_korean_index_from_naver(index_type: str) -> dict[str, Any] | None:
     try:
         response = requests.get(
             "https://finance.naver.com/sise/",
-            headers={"User-Agent": USER_AGENT},
+            headers={"User-Agent": USER_AGENT, "Referer": "https://finance.naver.com/"},
             timeout=10,
         )
         response.raise_for_status()
-        html = response.text
 
+        html = response.text
         target_name = "코스피" if index_type == "KOSPI" else "코스닥"
 
-        # 1) 전체 HTML을 텍스트로 평탄화해서 먼저 찾는다.
-        full_text = re.sub(r"<[^>]+>", " ", html)
-        full_text = unescape(full_text)
-        full_text = re.sub(r"\s+", " ", full_text).strip()
+        search_texts: list[str] = []
+        search_texts.append(_normalize_text_for_parse(html))
+        for raw in re.split(r"</?(?:dd|dt|li|span|div|p|br|a|em|strong|td|tr|th)[^>]*>", html, flags=re.IGNORECASE):
+            line = _normalize_text_for_parse(raw)
+            if line:
+                search_texts.append(line)
 
         patterns = [
-            rf"{target_name}\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(플러스|마이너스)\s*([\d,]+(?:\.\d+)?)\s*퍼센트",
-            rf"{target_name}\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(플러스|마이너스)\s*([\d,]+(?:\.\d+)?)\s*퍼센트",
+            rf"{target_name}\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(?:플러스|마이너스)?\s*([\d,]+(?:\.\d+)?)\s*퍼센트",
+            rf"{target_name}\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(?:플러스|마이너스)?\s*([\d,]+(?:\.\d+)?)%",
+            rf"{target_name}\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(?:플러스|마이너스)?\s*([\d,]+(?:\.\d+)?)",
         ]
 
-        match = None
-        for pattern in patterns:
-            match = re.search(pattern, full_text)
-            if match:
-                break
+        for text in search_texts:
+            if target_name not in text or "전일대비" not in text:
+                continue
 
-        # 2) 혹시 HTML 안에 줄 단위로 더 잘 보이면 개별 라인도 다시 훑는다.
-        if not match:
-            lines = []
-            for raw in re.split(r"</?(?:dd|dt|li|span|div|p|br)[^>]*>", html, flags=re.IGNORECASE):
-                line = re.sub(r"<[^>]+>", " ", raw)
-                line = unescape(line)
-                line = re.sub(r"\s+", " ", line).strip()
-                if line:
-                    lines.append(line)
-
-            for line in lines:
-                if target_name not in line:
+            for pattern in patterns:
+                match = re.search(pattern, text)
+                if not match:
                     continue
-                for pattern in patterns:
-                    match = re.search(pattern, line)
-                    if match:
-                        break
-                if match:
-                    break
 
-        if not match:
-            raise RuntimeError(f"{index_type} text parse failed")
+                price = float(match.group(1).replace(",", ""))
+                direction = match.group(2)
+                change = float(match.group(3).replace(",", ""))
+                change_percent = float(match.group(4).replace(",", ""))
 
-        price = float(match.group(1).replace(",", ""))
-        direction = match.group(2)
-        change = float(match.group(3).replace(",", ""))
-        signed_word = match.group(4)
-        change_percent = float(match.group(5).replace(",", ""))
+                if direction == "하락":
+                    change = -abs(change)
+                    change_percent = -abs(change_percent)
+                else:
+                    change = abs(change)
+                    change_percent = abs(change_percent)
 
-        is_down = direction == "하락" or signed_word == "마이너스"
-        if is_down:
-            change = -abs(change)
-            change_percent = -abs(change_percent)
-        else:
-            change = abs(change)
-            change_percent = abs(change_percent)
+                return {
+                    "name": INDEX_LABELS.get(index_type, index_type),
+                    "ticker": INDEX_TICKERS.get(index_type, index_type),
+                    "price": price,
+                    "change": change,
+                    "changePercent": change_percent,
+                    "source": "naver_index",
+                }
 
-        return {
-            "name": INDEX_LABELS.get(index_type, index_type),
-            "ticker": INDEX_TICKERS.get(index_type, index_type),
-            "price": price,
-            "change": change,
-            "changePercent": change_percent,
-            "source": "naver_index",
-        }
+            numbers = re.findall(r"[\d,]+(?:\.\d+)?", text)
+            if len(numbers) >= 3:
+                price = float(numbers[0].replace(",", ""))
+                change = float(numbers[1].replace(",", ""))
+                change_percent = float(numbers[2].replace(",", ""))
+                if "하락" in text or "마이너스" in text:
+                    change = -abs(change)
+                    change_percent = -abs(change_percent)
+                elif "상승" in text or "플러스" in text:
+                    change = abs(change)
+                    change_percent = abs(change_percent)
+                return {
+                    "name": INDEX_LABELS.get(index_type, index_type),
+                    "ticker": INDEX_TICKERS.get(index_type, index_type),
+                    "price": price,
+                    "change": change,
+                    "changePercent": change_percent,
+                    "source": "naver_index_fallback",
+                }
+
+        raise RuntimeError(f"{index_type} text parse failed")
+
     except Exception as exc:
         print("naver index parse error:", index_type, exc)
         return None
