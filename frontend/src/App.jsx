@@ -399,10 +399,6 @@ export default function App() {
   const [chartPeriod, setChartPeriod] = useState("1mo");
   const [chartItems, setChartItems] = useState([]);
   const [chartLoading, setChartLoading] = useState(false);
-  const [selectedMarketItem, setSelectedMarketItem] = useState(null);
-  const [marketChartPeriod, setMarketChartPeriod] = useState("1mo");
-  const [marketChartItems, setMarketChartItems] = useState([]);
-  const [marketChartLoading, setMarketChartLoading] = useState(false);
   const [defaultEditMode, setDefaultEditMode] = useState(false);
 
   const stockItemsRef = useRef(stockItems);
@@ -415,7 +411,6 @@ export default function App() {
   const refreshSeqRef = useRef({ holdings: 0 });
   const holdRefreshPauseUntilRef = useRef(0);
   const stockChartRequestRef = useRef(0);
-  const marketChartRequestRef = useRef(0);
 
   useEffect(() => {
     stockItemsRef.current = stockItems;
@@ -1136,19 +1131,6 @@ export default function App() {
     await fetchChart(item.ticker, chartPeriod);
   }
 
-  async function handleSelectMarketItem(item) {
-    const same = selectedMarketItem?.key === item.key;
-    if (same) {
-      marketChartRequestRef.current += 1;
-      setSelectedMarketItem(null);
-      setMarketChartItems([]);
-      setMarketChartLoading(false);
-      return;
-    }
-    setSelectedMarketItem(item);
-    await fetchMarketChart(item.key, marketChartPeriod);
-  }
-
   const futureIndexes = useMemo(
     () => marketItems.filter((item) => ["DOW_FUT", "NASDAQ_FUT"].includes(item.key)),
     [marketItems]
@@ -1257,8 +1239,6 @@ export default function App() {
                       <PriceCard
                         key={item.key}
                         item={item}
-                        onSelect={handleSelectMarketItem}
-                        selected={selectedMarketItem?.key === item.key}
                       />
                     ))}
                     {row.length === 1 ? <div /> : null}
