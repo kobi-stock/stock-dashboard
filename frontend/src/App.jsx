@@ -410,7 +410,6 @@ export default function App() {
   const investSearchTimerRef = useRef(null);
   const refreshSeqRef = useRef({ holdings: 0 });
   const holdRefreshPauseUntilRef = useRef(0);
-  const stockChartRequestRef = useRef(0);
 
   useEffect(() => {
     stockItemsRef.current = stockItems;
@@ -1121,10 +1120,8 @@ export default function App() {
   async function handleSelectStock(item) {
     const same = selectedStock?.ticker === item.ticker;
     if (same) {
-      stockChartRequestRef.current += 1;
       setSelectedStock(null);
       setChartItems([]);
-      setChartLoading(false);
       return;
     }
     setSelectedStock(item);
@@ -1141,14 +1138,6 @@ export default function App() {
     [marketItems]
   );
 
-  const commodityRows = useMemo(() => {
-    const byKey = new Map(marketItems.map((item) => [item.key, item]));
-    return [
-      ["WTI", "BRENT"],
-      ["GOLD", "SILVER"],
-      ["COPPER", "STEEL"],
-    ].map((row) => row.map((key) => byKey.get(key)).filter(Boolean));
-  }, [marketItems]);
 
   const fxItems = useMemo(
     () => marketItems.filter((item) => ["USDKRW", "JPYKRW"].includes(item.key)),
@@ -1211,53 +1200,21 @@ export default function App() {
               <h2 className="section-title">미국 선물</h2>
               <div className="card-grid">
                 {futureIndexes.length ? futureIndexes.map((item) => (
-                  <PriceCard
-                    key={item.key}
-                    item={item}
-                  />
+                  <PriceCard key={item.key} item={item} />
                 )) : <div className="empty-box">표시할 선물 데이터가 없습니다.</div>}
               </div>
 
               <h2 className="section-title">주요 지수</h2>
               <div className="card-grid">
                 {mainIndexes.length ? mainIndexes.map((item) => (
-                  <PriceCard
-                    key={item.key}
-                    item={item}
-                  />
+                  <PriceCard key={item.key} item={item} />
                 )) : <div className="empty-box">표시할 지수 데이터가 없습니다.</div>}
               </div>
-
-              <h2 className="section-title">원자재</h2>
-              <div style={{ display: "grid", gap: 12 }}>
-                {commodityRows.some((row) => row.length) ? commodityRows.map((row, rowIndex) => (
-                  <div
-                    key={`commodity-row-${rowIndex}`}
-                    style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 12 }}
-                  >
-                    {row.map((item) => (
-                      <PriceCard
-                        key={item.key}
-                        item={item}
-                      />
-                    ))}
-                    {row.length === 1 ? <div /> : null}
-                  </div>
-                )) : <div className="empty-box">표시할 원자재 데이터가 없습니다.</div>}
-              </div>
-
               <h2 className="section-title">환율</h2>
               <div className="card-grid">
                 {fxItems.length ? fxItems.map((item) => (
-                  <PriceCard
-                    key={item.key}
-                    item={item}
-                  />
+                  <PriceCard key={item.key} item={item} />
                 )) : <div className="empty-box">표시할 환율 데이터가 없습니다.</div>}
-              </div>
-
-              <div className="empty-box" style={{ marginTop: 12 }}>
-                지수 / 원자재 / 환율 차트는 안정화 후 다시 추가할 예정입니다.
               </div>
             </section>
           )}
