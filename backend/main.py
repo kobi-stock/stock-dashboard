@@ -88,16 +88,23 @@ INDEX_TICKERS = {
     "KOSDAQ": "^KQ11",
     "DOW": "^DJI",
     "NASDAQ": "^IXIC",
-    # 차트 안정성을 위해 선물 키도 지수로 fallback 가능하게 둠
-    "DOW_FUT": "^DJI",
-    "NASDAQ_FUT": "^IXIC",
+    "DOW_FUT": "YM=F",       # 다우 선물
+    "NASDAQ_FUT": "NQ=F",    # 나스닥 선물
+    "SP500_FUT": "ES=F",     # S&P500 선물
+    "GOLD": "GC=F",          # 금
+    "OIL": "CL=F",           # WTI 원유
+    "COPPER": "HG=F",        # 구리
     "USDKRW": "KRW=X",
     "JPYKRW": "JPYKRW=X",
 }
 
 MARKET_CHART_FALLBACKS = {
-    "DOW_FUT": ["^DJI", "YM=F"],
-    "NASDAQ_FUT": ["^IXIC", "NQ=F"],
+    "DOW_FUT": ["YM=F", "^DJI"],
+    "NASDAQ_FUT": ["NQ=F", "^IXIC"],
+    "SP500_FUT": ["ES=F", "^GSPC"],
+    "GOLD": ["GC=F"],
+    "OIL": ["CL=F"],
+    "COPPER": ["HG=F"],
     "USDKRW": ["KRW=X", "USDKRW=X"],
     "JPYKRW": ["JPYKRW=X"],
     "KOSPI": ["^KS11"],
@@ -113,63 +120,32 @@ INDEX_LABELS = {
     "NASDAQ": "나스닥",
     "DOW_FUT": "다우선물",
     "NASDAQ_FUT": "나스닥선물",
+    "SP500_FUT": "S&P500선물",
+    "GOLD": "금(Gold)",
+    "OIL": "WTI원유",
+    "COPPER": "구리",
     "USDKRW": "달러/원",
     "JPYKRW": "엔/원",
 }
 
 INDEX_ORDER = [
-    "DOW_FUT", "NASDAQ_FUT",
+    "DOW_FUT", "NASDAQ_FUT", "SP500_FUT",
     "KOSPI", "KOSDAQ", "DOW", "NASDAQ",
+    "GOLD", "OIL", "COPPER",
     "USDKRW", "JPYKRW",
 ]
 
 KIS_EXECUTION_FIELDS = [
-    "MKSC_SHRN_ISCD",
-    "STCK_CNTG_HOUR",
-    "STCK_PRPR",
-    "PRDY_VRSS_SIGN",
-    "PRDY_VRSS",
-    "PRDY_CTRT",
-    "WGHN_AVRG_STCK_PRC",
-    "STCK_OPRC",
-    "STCK_HGPR",
-    "STCK_LWPR",
-    "ASKP1",
-    "BIDP1",
-    "CNTG_VOL",
-    "ACML_VOL",
-    "ACML_TR_PBMN",
-    "SELN_CNTG_CSNU",
-    "SHNU_CNTG_CSNU",
-    "NTBY_CNTG_CSNU",
-    "CTTR",
-    "SELN_CNTG_SMTN",
-    "SHNU_CNTG_SMTN",
-    "CCLD_DVSN",
-    "SHNU_RATE",
-    "PRDY_VOL_VRSS_ACML_VOL_RATE",
-    "OPRC_HOUR",
-    "OPRC_VRSS_PRPR_SIGN",
-    "OPRC_VRSS_PRPR",
-    "HGPR_HOUR",
-    "HGPR_VRSS_PRPR_SIGN",
-    "HGPR_VRSS_PRPR",
-    "LWPR_HOUR",
-    "LWPR_VRSS_PRPR_SIGN",
-    "LWPR_VRSS_PRPR",
-    "BSOP_DATE",
-    "NEW_MKOP_CLS_CODE",
-    "TRHT_YN",
-    "ASKP_RSQN1",
-    "BIDP_RSQN1",
-    "TOTAL_ASKP_RSQN",
-    "TOTAL_BIDP_RSQN",
-    "VOL_TNRT",
-    "PRDY_SMNS_HOUR_ACML_VOL",
-    "PRDY_SMNS_HOUR_ACML_VOL_RATE",
-    "HOUR_CLS_CODE",
-    "MRKT_TRTM_CLS_CODE",
-    "VI_STND_PRC",
+    "MKSC_SHRN_ISCD", "STCK_CNTG_HOUR", "STCK_PRPR", "PRDY_VRSS_SIGN", "PRDY_VRSS",
+    "PRDY_CTRT", "WGHN_AVRG_STCK_PRC", "STCK_OPRC", "STCK_HGPR", "STCK_LWPR",
+    "ASKP1", "BIDP1", "CNTG_VOL", "ACML_VOL", "ACML_TR_PBMN", "SELN_CNTG_CSNU",
+    "SHNU_CNTG_CSNU", "NTBY_CNTG_CSNU", "CTTR", "SELN_CNTG_SMTN", "SHNU_CNTG_SMTN",
+    "CCLD_DVSN", "SHNU_RATE", "PRDY_VOL_VRSS_ACML_VOL_RATE", "OPRC_HOUR",
+    "OPRC_VRSS_PRPR_SIGN", "OPRC_VRSS_PRPR", "HGPR_HOUR", "HGPR_VRSS_PRPR_SIGN",
+    "HGPR_VRSS_PRPR", "LWPR_HOUR", "LWPR_VRSS_PRPR_SIGN", "LWPR_VRSS_PRPR",
+    "BSOP_DATE", "NEW_MKOP_CLS_CODE", "TRHT_YN", "ASKP_RSQN1", "BIDP_RSQN1",
+    "TOTAL_ASKP_RSQN", "TOTAL_BIDP_RSQN", "VOL_TNRT", "PRDY_SMNS_HOUR_ACML_VOL",
+    "PRDY_SMNS_HOUR_ACML_VOL_RATE", "HOUR_CLS_CODE", "MRKT_TRTM_CLS_CODE", "VI_STND_PRC"
 ]
 
 _TOKEN_CACHE: dict[str, Any] = {"value": None, "expires_at": None}
@@ -588,10 +564,38 @@ def get_yf_quote(ticker: str, name: str | None = None) -> dict[str, Any]:
     return quote
 
 
+# 원자재 및 선물 가격 정확도를 위한 경량화 함수 개선
 def get_market_quote_light(ticker: str, name: str | None = None) -> dict[str, Any]:
     normalized_ticker = normalize_search_input(ticker)
     display_name = name or normalized_ticker
 
+    try:
+        # 1차 시도: yf.info를 사용하여 최신 가격을 빠르게 가져옴 (원자재/선물 등에 매우 유리)
+        yt = yf.Ticker(normalized_ticker)
+        info = yt.info
+        price = _to_float_or_none(info.get("regularMarketPrice")) or _to_float_or_none(info.get("currentPrice"))
+        prev_close = _to_float_or_none(info.get("regularMarketPreviousClose")) or _to_float_or_none(info.get("previousClose"))
+
+        if price is not None:
+            change = None
+            change_percent = None
+            if prev_close not in (None, 0):
+                change = price - prev_close
+                change_percent = (change / prev_close) * 100
+
+            return {
+                "name": display_name,
+                "ticker": normalized_ticker,
+                "price": round(price, 4) if price is not None else None,
+                "change": round(change, 4) if change is not None else None,
+                "changePercent": round(change_percent, 4) if change_percent is not None else None,
+                "source": "yf_info",
+            }
+    except Exception as e:
+        print(f"Info fetch failed for {ticker}, falling back to history: {e}")
+        pass
+
+    # 2차 시도: info로 못 가져온 경우 기존 5일 차트 방식으로 폴백
     items = fetch_yf_chart(normalized_ticker, period="5d")
     if len(items) >= 2:
         last = items[-1]
@@ -842,7 +846,6 @@ def get_cached_chart_items(ticker: str, period: str = "1mo") -> list[dict[str, A
 
     items = fetch_yf_chart(normalized, period=period)
 
-    # 빈 차트는 캐시에 넣지 않음. 다음 요청에서 다시 시도.
     if items:
         with _CACHE_LOCK:
             _CHART_CACHE[cache_key] = {"items": items, "fetched_at": datetime.now()}
@@ -851,11 +854,6 @@ def get_cached_chart_items(ticker: str, period: str = "1mo") -> list[dict[str, A
 
 
 def prewarm_chart_cache() -> None:
-    """Warm only stock charts for the stable build.
-
-    Market charts are intentionally not prewarmed because index/commodity/fx chart
-    sources have been noisy and can trigger repeated Yahoo failures on Render.
-    """
     tickers = [item.get("ticker") for item in BASE_STOCKS if item.get("ticker")]
     deduped: list[str] = []
     seen: set[str] = set()
