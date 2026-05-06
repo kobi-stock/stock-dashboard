@@ -1,6 +1,7 @@
-fastapi
-uvicorn[standard]
-python-dotenv
+
+streamlit
+yfinance --upgrade
 requests
-yfinance
-websockets
+python-dotenv
+pandas
+beautifulsoup4
