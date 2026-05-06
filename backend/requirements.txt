@@ -1,6 +1,5 @@
-
 streamlit
-yfinance --upgrade
+yfinance
 requests
 python-dotenv
 pandas
