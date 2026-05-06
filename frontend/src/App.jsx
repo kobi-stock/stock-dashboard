@@ -786,7 +786,7 @@ export default function App() {
                 changePercent: fresh.changePercent,
                 nxt: fresh.nxt ?? item.nxt ?? null,
                 extended: fresh.extended ?? item.extended ?? null,
-                asOf: fresh.asOf ?? item.asOf ?? null,
+                asOf: fresh.asOf ?? item.asOf || null,
                 stale: fresh.stale ?? false,
               }
             : item;
@@ -1138,6 +1138,10 @@ export default function App() {
     [marketItems]
   );
 
+  const commodityItems = useMemo(
+    () => marketItems.filter((item) => ["GOLD", "OIL", "COPPER"].includes(item.key)),
+    [marketItems]
+  );
 
   const fxItems = useMemo(
     () => marketItems.filter((item) => ["USDKRW", "JPYKRW"].includes(item.key)),
@@ -1210,6 +1214,14 @@ export default function App() {
                   <PriceCard key={item.key} item={item} />
                 )) : <div className="empty-box">표시할 지수 데이터가 없습니다.</div>}
               </div>
+
+              <h2 className="section-title">원자재</h2>
+              <div className="card-grid">
+                {commodityItems.length ? commodityItems.map((item) => (
+                  <PriceCard key={item.key} item={item} />
+                )) : <div className="empty-box">표시할 원자재 데이터가 없습니다.</div>}
+              </div>
+
               <h2 className="section-title">환율</h2>
               <div className="card-grid">
                 {fxItems.length ? fxItems.map((item) => (
