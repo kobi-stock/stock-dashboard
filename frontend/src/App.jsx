@@ -725,7 +725,7 @@ export default function App() {
           ...item,
           ...patch,
           _wsTs: patch._wsTs,
-          asOf: patch.asOf || patch._wsTs || item.asOf || null,
+          asOf: patch.asOf || (patch._wsTs || (item.asOf || null)),
           stale: patch.stale ?? false,
           name: patch.name || item.name,
           price: patch.price ?? item.price,
@@ -786,7 +786,7 @@ export default function App() {
                 changePercent: fresh.changePercent,
                 nxt: fresh.nxt ?? item.nxt ?? null,
                 extended: fresh.extended ?? item.extended ?? null,
-                asOf: fresh.asOf ?? item.asOf || null,
+                asOf: fresh.asOf || (item.asOf || null),
                 stale: fresh.stale ?? false,
               }
             : item;
