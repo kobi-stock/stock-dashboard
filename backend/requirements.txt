@@ -1,6 +1,7 @@
-streamlit
-yfinance
+fastapi
+uvicorn
 requests
+websockets
+yfinance
 python-dotenv
 pandas
-beautifulsoup4
