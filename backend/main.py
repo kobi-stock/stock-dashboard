@@ -1161,8 +1161,11 @@ def get_korean_index_from_naver(index_type: str) -> dict[str, Any] | None:
         ).json()
 
         data = res["result"]["areas"][0]["datas"][0]
-        price = _to_float_or_none(data.get("nv"))
-        change = _to_float_or_none(data.get("cv"))
+        # naver polling API returns index values x100 (e.g. 798141 → 7981.41)
+        raw_price = _to_float_or_none(data.get("nv"))
+        price = round(raw_price / 100, 2) if raw_price is not None else None
+        raw_change = _to_float_or_none(data.get("cv"))
+        change = round(raw_change / 100, 2) if raw_change is not None else None
         change_percent = _to_float_or_none(data.get("cr"))
 
         # sv: 2=상승, 5=하락
