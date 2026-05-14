@@ -1147,92 +1147,41 @@ def _normalize_text_for_parse(value: str) -> str:
 
 
 def get_korean_index_from_naver(index_type: str) -> dict[str, Any] | None:
-    def _safe_float(raw: str | None) -> float | None:
-        cleaned = str(raw or "").replace(",", "").strip()
-        if not cleaned:
-            return None
-        try:
-            return float(cleaned)
-        except Exception:
-            return None
+    symbol_map = {"KOSPI": "KOSPI", "KOSDAQ": "KOSDAQ"}
+    symbol = symbol_map.get(index_type)
+    if not symbol:
+        return None
 
     try:
-        response = requests.get(
-            "https://finance.naver.com/sise/",
+        url = f"https://polling.finance.naver.com/api/realtime?query=SERVICE_INDEX:{symbol}"
+        res = requests.get(
+            url,
             headers={"User-Agent": USER_AGENT, "Referer": "https://finance.naver.com/"},
             timeout=10,
-        )
-        response.raise_for_status()
+        ).json()
 
-        html = response.text
-        target_name = "코스피" if index_type == "KOSPI" else "코스닥"
+        data = res["result"]["areas"][0]["datas"][0]
+        price = _to_float_or_none(data.get("nv"))
+        change = _to_float_or_none(data.get("cv"))
+        change_percent = _to_float_or_none(data.get("cr"))
 
-        search_texts: list[str] = []
-        search_texts.append(_normalize_text_for_parse(html))
-        for raw in re.split(r"</?(?:dd|dt|li|span|div|p|br|a|em|strong|td|tr|th)[^>]*>", html, flags=re.IGNORECASE):
-            line = _normalize_text_for_parse(raw)
-            if line:
-                search_texts.append(line)
+        # sv: 2=상승, 5=하락
+        sign = str(data.get("sv", "")).strip()
+        if sign == "5":
+            change = -abs(change) if change is not None else None
+            change_percent = -abs(change_percent) if change_percent is not None else None
+        elif sign in {"1", "2"}:
+            change = abs(change) if change is not None else None
+            change_percent = abs(change_percent) if change_percent is not None else None
 
-        patterns = [
-            rf"{target_name}\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(?:플러스|마이너스)?\s*([\d,]+(?:\.\d+)?)\s*퍼센트",
-            rf"{target_name}\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(?:플러스|마이너스)?\s*([\d,]+(?:\.\d+)?)%",
-            rf"{target_name}\s*지수\s*([\d,]+(?:\.\d+)?)\s*전일대비\s*(상승|하락)\s*([\d,]+(?:\.\d+)?)\s*(?:플러스|마이너스)?\s*([\d,]+(?:\.\d+)?)",
-        ]
-
-        for text in search_texts:
-            if target_name not in text or "전일대비" not in text:
-                continue
-
-            for pattern in patterns:
-                match = re.search(pattern, text)
-                if not match:
-                    continue
-
-                price = _safe_float(match.group(1))
-                direction = match.group(2)
-                change = _safe_float(match.group(3))
-                change_percent = _safe_float(match.group(4))
-
-                if price is None or change is None or change_percent is None:
-                    continue
-
-                if direction == "하락":
-                    change = -abs(change)
-                    change_percent = -abs(change_percent)
-                else:
-                    change = abs(change)
-                    change_percent = abs(change_percent)
-
-                return {
-                    "name": INDEX_LABELS.get(index_type, index_type),
-                    "ticker": INDEX_TICKERS.get(index_type, index_type),
-                    "price": price,
-                    "change": change,
-                    "changePercent": change_percent,
-                    "source": "naver_index",
-                }
-
-            numbers = re.findall(r"[\d,]+(?:\.\d+)?", text)
-            parsed = [_safe_float(number) for number in numbers[:3]]
-            if len(parsed) >= 3 and all(value is not None for value in parsed):
-                price, change, change_percent = parsed
-                if "하락" in text or "마이너스" in text:
-                    change = -abs(change)
-                    change_percent = -abs(change_percent)
-                elif "상승" in text or "플러스" in text:
-                    change = abs(change)
-                    change_percent = abs(change_percent)
-                return {
-                    "name": INDEX_LABELS.get(index_type, index_type),
-                    "ticker": INDEX_TICKERS.get(index_type, index_type),
-                    "price": price,
-                    "change": change,
-                    "changePercent": change_percent,
-                    "source": "naver_index_fallback",
-                }
-
-        raise RuntimeError(f"{index_type} text parse failed")
+        return {
+            "name": INDEX_LABELS.get(index_type, index_type),
+            "ticker": INDEX_TICKERS.get(index_type, index_type),
+            "price": price,
+            "change": change,
+            "changePercent": change_percent,
+            "source": "naver_polling",
+        }
 
     except Exception as exc:
         print("naver index parse error:", index_type, exc)
