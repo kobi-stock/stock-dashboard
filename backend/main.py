@@ -565,35 +565,52 @@ def get_yf_quote(ticker: str, name: str | None = None) -> dict[str, Any]:
 
 
 # 원자재 및 선물 가격 정확도를 위한 경량화 함수 개선
+
+def _yahoo_http_quote(ticker: str) -> dict[str, Any] | None:
+    """yfinance 라이브러리 대신 Yahoo Finance HTTP API 직접 호출 (401 회피)"""
+    try:
+        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "application/json",
+            "Referer": "https://finance.yahoo.com/",
+        }
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code != 200:
+            return None
+        data = res.json()
+        meta = data["chart"]["result"][0]["meta"]
+        price = _to_float_or_none(meta.get("regularMarketPrice"))
+        prev_close = _to_float_or_none(meta.get("chartPreviousClose") or meta.get("previousClose"))
+        if price is None:
+            return None
+        change = round(price - prev_close, 4) if prev_close not in (None, 0) else None
+        change_pct = round((change / prev_close) * 100, 4) if change is not None and prev_close not in (None, 0) else None
+        return {
+            "price": round(price, 4),
+            "change": change,
+            "changePercent": change_pct,
+            "source": "yahoo_http",
+        }
+    except Exception:
+        return None
+
+
 def get_market_quote_light(ticker: str, name: str | None = None) -> dict[str, Any]:
     normalized_ticker = normalize_search_input(ticker)
     display_name = name or normalized_ticker
 
-    try:
-        # 1차 시도: yf.info를 사용하여 최신 가격을 빠르게 가져옴 (원자재/선물 등에 매우 유리)
-        yt = yf.Ticker(normalized_ticker)
-        info = yt.info
-        price = _to_float_or_none(info.get("regularMarketPrice")) or _to_float_or_none(info.get("currentPrice"))
-        prev_close = _to_float_or_none(info.get("regularMarketPreviousClose")) or _to_float_or_none(info.get("previousClose"))
-
-        if price is not None:
-            change = None
-            change_percent = None
-            if prev_close not in (None, 0):
-                change = price - prev_close
-                change_percent = (change / prev_close) * 100
-
-            return {
-                "name": display_name,
-                "ticker": normalized_ticker,
-                "price": round(price, 4) if price is not None else None,
-                "change": round(change, 4) if change is not None else None,
-                "changePercent": round(change_percent, 4) if change_percent is not None else None,
-                "source": "yf_info",
-            }
-    except Exception as e:
-        print(f"Info fetch failed for {ticker}, falling back to history: {e}")
-        pass
+    # 1차 시도: Yahoo HTTP API 직접 호출 (yfinance 401 에러 회피)
+    http_result = _yahoo_http_quote(normalized_ticker)
+    if http_result is not None:
+        return {
+            "name": display_name,
+            "ticker": normalized_ticker,
+            "price": http_result["price"],
+            "change": http_result["change"],
+            "changePercent": http_result["changePercent"],
+            "source": http_result["source"],
+        }
 
     # 2차 시도: info로 못 가져온 경우 기존 5일 차트 방식으로 폴백
     items = fetch_yf_chart(normalized_ticker, period="5d")
