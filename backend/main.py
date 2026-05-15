@@ -568,32 +568,34 @@ def get_yf_quote(ticker: str, name: str | None = None) -> dict[str, Any]:
 
 def _yahoo_http_quote(ticker: str) -> dict[str, Any] | None:
     """yfinance 라이브러리 대신 Yahoo Finance HTTP API 직접 호출 (401 회피)"""
-    try:
-        url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-            "Referer": "https://finance.yahoo.com/",
-        }
-        res = requests.get(url, headers=headers, timeout=10)
-        if res.status_code != 200:
-            return None
-        data = res.json()
-        meta = data["chart"]["result"][0]["meta"]
-        price = _to_float_or_none(meta.get("regularMarketPrice"))
-        prev_close = _to_float_or_none(meta.get("chartPreviousClose") or meta.get("previousClose"))
-        if price is None:
-            return None
-        change = round(price - prev_close, 4) if prev_close not in (None, 0) else None
-        change_pct = round((change / prev_close) * 100, 4) if change is not None and prev_close not in (None, 0) else None
-        return {
-            "price": round(price, 4),
-            "change": change,
-            "changePercent": change_pct,
-            "source": "yahoo_http",
-        }
-    except Exception:
-        return None
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "application/json",
+        "Referer": "https://finance.yahoo.com/",
+    }
+    for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+        try:
+            url = f"https://{host}/v8/finance/chart/{ticker}"
+            res = requests.get(url, headers=headers, timeout=3)
+            if res.status_code != 200:
+                continue
+            data = res.json()
+            meta = data["chart"]["result"][0]["meta"]
+            price = _to_float_or_none(meta.get("regularMarketPrice"))
+            prev_close = _to_float_or_none(meta.get("chartPreviousClose") or meta.get("previousClose"))
+            if price is None:
+                continue
+            change = round(price - prev_close, 4) if prev_close not in (None, 0) else None
+            change_pct = round((change / prev_close) * 100, 4) if change is not None and prev_close not in (None, 0) else None
+            return {
+                "price": round(price, 4),
+                "change": change,
+                "changePercent": change_pct,
+                "source": "yahoo_http",
+            }
+        except Exception:
+            continue
+    return None
 
 
 def get_market_quote_light(ticker: str, name: str | None = None) -> dict[str, Any]:
@@ -612,7 +614,32 @@ def get_market_quote_light(ticker: str, name: str | None = None) -> dict[str, An
             "source": http_result["source"],
         }
 
-    # 2차 시도: info로 못 가져온 경우 기존 5일 차트 방식으로 폴백
+    # 2차 시도: Stooq HTTP API (키 없음, Render IP 차단 없음)
+    try:
+        stooq_ticker = normalized_ticker.replace("^", "").replace("=F", "f").lower()
+        url = f"https://stooq.com/q/l/?s={stooq_ticker}&f=sd2t2ohlcv&h&e=csv"
+        res = requests.get(url, timeout=4)
+        if res.status_code == 200:
+            lines = res.text.strip().splitlines()
+            if len(lines) >= 2:
+                cols = lines[1].split(",")
+                price = _to_float_or_none(cols[6] if len(cols) > 6 else None)  # Close
+                open_price = _to_float_or_none(cols[3] if len(cols) > 3 else None)  # Open
+                if price is not None and open_price is not None:
+                    change = round(price - open_price, 4)
+                    change_pct = round((change / open_price) * 100, 4) if open_price != 0 else None
+                    return {
+                        "name": display_name,
+                        "ticker": normalized_ticker,
+                        "price": round(price, 4),
+                        "change": change,
+                        "changePercent": change_pct,
+                        "source": "stooq",
+                    }
+    except Exception:
+        pass
+
+    # 3차 시도: yfinance 차트 (최후 폴백)
     items = fetch_yf_chart(normalized_ticker, period="5d")
     if len(items) >= 2:
         last = items[-1]
