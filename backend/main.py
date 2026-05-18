@@ -155,7 +155,7 @@ REALTIME_QUOTES_CACHE: dict[str, dict[str, Any]] = {}
 LAST_GOOD_QUOTES_CACHE: dict[str, dict[str, Any]] = {}
 _KIS_DISABLED_UNTIL: datetime | None = None
 
-MARKET_CACHE_TTL_SECONDS = 45
+MARKET_CACHE_TTL_SECONDS = 120
 NEWS_CACHE_TTL_SECONDS = 45
 CHART_CACHE_TTL_SECONDS = 600
 _MARKET_CACHE: dict[str, Any] = {"items": None, "fetched_at": None}
@@ -576,7 +576,7 @@ def _yahoo_http_quote(ticker: str) -> dict[str, Any] | None:
     for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
         try:
             url = f"https://{host}/v8/finance/chart/{ticker}"
-            res = requests.get(url, headers=headers, timeout=3)
+            res = requests.get(url, headers=headers, timeout=2)
             if res.status_code != 200:
                 continue
             data = res.json()
@@ -618,7 +618,7 @@ def get_market_quote_light(ticker: str, name: str | None = None) -> dict[str, An
     try:
         stooq_ticker = normalized_ticker.replace("^", "").replace("=F", "f").lower()
         url = f"https://stooq.com/q/l/?s={stooq_ticker}&f=sd2t2ohlcv&h&e=csv"
-        res = requests.get(url, timeout=4)
+        res = requests.get(url, timeout=2)
         if res.status_code == 200:
             lines = res.text.strip().splitlines()
             if len(lines) >= 2:
@@ -1354,6 +1354,17 @@ async def prewarm_light_data() -> None:
         print("prewarm error:", exc)
 
 
+async def background_market_refresh() -> None:
+    """캐시 만료 전에 미리 갱신 — 사용자 요청 시 항상 캐시 히트되도록"""
+    await asyncio.sleep(30)  # 서버 시작 직후 prewarm과 겹치지 않도록 대기
+    while True:
+        try:
+            await asyncio.to_thread(get_cached_market_items, True)
+        except Exception as exc:
+            print("background market refresh error:", exc)
+        await asyncio.sleep(100)  # TTL(120s)보다 짧게 유지
+
+
 @app.get("/")
 def root():
     return {"message": "ok"}
@@ -1547,6 +1558,7 @@ async def startup_event():
         REALTIME_HUB.task = asyncio.create_task(REALTIME_HUB.publish_loop())
     asyncio.create_task(prewarm_light_data())
     asyncio.create_task(asyncio.to_thread(prewarm_chart_cache))
+    asyncio.create_task(background_market_refresh())
 
 
 @app.on_event("shutdown")
