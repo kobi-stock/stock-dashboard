@@ -40,6 +40,7 @@ KIS_WS_URL = os.getenv("KIS_WS_URL", "ws://ops.koreainvestment.com:21000").strip
 KIS_CUSTTYPE = os.getenv("KIS_CUSTTYPE", "P").strip() or "P"
 NAVER_CLIENT_ID = os.getenv("NAVER_CLIENT_ID", "").strip()
 NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET", "").strip()
+DISABLE_YAHOO_HTTP = os.getenv("DISABLE_YAHOO_HTTP", "true").lower() == "true"  # Render IP 차단 대응
 
 USER_AGENT = "Mozilla/5.0"
 YAHOO_SEARCH_URL = "https://query1.finance.yahoo.com/v1/finance/search"
@@ -602,30 +603,18 @@ def get_market_quote_light(ticker: str, name: str | None = None) -> dict[str, An
     normalized_ticker = normalize_search_input(ticker)
     display_name = name or normalized_ticker
 
-    # 1차 시도: Yahoo HTTP API 직접 호출 (yfinance 401 에러 회피)
-    http_result = _yahoo_http_quote(normalized_ticker)
-    if http_result is not None:
-        return {
-            "name": display_name,
-            "ticker": normalized_ticker,
-            "price": http_result["price"],
-            "change": http_result["change"],
-            "changePercent": http_result["changePercent"],
-            "source": http_result["source"],
-        }
-
-    # 2차 시도: Stooq HTTP API (키 없음, Render IP 차단 없음)
+    # 1차 시도: Stooq HTTP API (Render IP 차단 없음, 빠름)
     try:
         stooq_ticker = normalized_ticker.replace("^", "").replace("=F", "f").lower()
         url = f"https://stooq.com/q/l/?s={stooq_ticker}&f=sd2t2ohlcv&h&e=csv"
-        res = requests.get(url, timeout=2)
+        res = requests.get(url, timeout=3)
         if res.status_code == 200:
             lines = res.text.strip().splitlines()
             if len(lines) >= 2:
                 cols = lines[1].split(",")
                 price = _to_float_or_none(cols[6] if len(cols) > 6 else None)  # Close
                 open_price = _to_float_or_none(cols[3] if len(cols) > 3 else None)  # Open
-                if price is not None and open_price is not None:
+                if price is not None and open_price is not None and price > 0:
                     change = round(price - open_price, 4)
                     change_pct = round((change / open_price) * 100, 4) if open_price != 0 else None
                     return {
@@ -638,6 +627,19 @@ def get_market_quote_light(ticker: str, name: str | None = None) -> dict[str, An
                     }
     except Exception:
         pass
+
+    # 2차 시도: Yahoo HTTP API (DISABLE_YAHOO_HTTP=false 일 때만, Render IP 차단 주의)
+    if not DISABLE_YAHOO_HTTP:
+        http_result = _yahoo_http_quote(normalized_ticker)
+        if http_result is not None:
+            return {
+                "name": display_name,
+                "ticker": normalized_ticker,
+                "price": http_result["price"],
+                "change": http_result["change"],
+                "changePercent": http_result["changePercent"],
+                "source": http_result["source"],
+            }
 
     # 3차 시도: yfinance 차트 (최후 폴백)
     items = fetch_yf_chart(normalized_ticker, period="5d")
@@ -918,7 +920,7 @@ def fetch_naver_news_once(query: str, display: int = 6) -> list[dict[str, Any]]:
         "https://openapi.naver.com/v1/search/news.json",
         headers={"X-Naver-Client-Id": NAVER_CLIENT_ID, "X-Naver-Client-Secret": NAVER_CLIENT_SECRET},
         params={"query": query, "display": display, "sort": "date"},
-        timeout=10,
+        timeout=5,
     )
     response.raise_for_status()
     data = response.json() or {}
@@ -1270,19 +1272,43 @@ def build_market_items() -> list[dict[str, Any]]:
     return items
 
 
+def _refresh_market_cache_bg() -> None:
+    """캐시 만료 시 백그라운드에서 갱신 — 요청 스레드를 막지 않음"""
+    try:
+        items = build_market_items()
+        with _CACHE_LOCK:
+            _MARKET_CACHE["items"] = items
+            _MARKET_CACHE["fetched_at"] = datetime.now()
+    except Exception as exc:
+        print("bg market refresh error:", exc)
+
+
+_BG_REFRESH_RUNNING = threading.Event()
+
+
 def get_cached_market_items(force_refresh: bool = False) -> list[dict[str, Any]]:
     with _CACHE_LOCK:
         cached_at = _MARKET_CACHE.get("fetched_at")
         cached_items = _MARKET_CACHE.get("items")
-        if not force_refresh and _is_cache_fresh(cached_at, MARKET_CACHE_TTL_SECONDS) and cached_items:
-            return _clone_items(cached_items)
+        is_fresh = _is_cache_fresh(cached_at, MARKET_CACHE_TTL_SECONDS)
 
+    # 캐시가 있으면 만료 여부와 무관하게 즉시 반환 (stale-while-revalidate)
+    if cached_items and not force_refresh:
+        if not is_fresh and not _BG_REFRESH_RUNNING.is_set():
+            _BG_REFRESH_RUNNING.set()
+            def _bg():
+                try:
+                    _refresh_market_cache_bg()
+                finally:
+                    _BG_REFRESH_RUNNING.clear()
+            threading.Thread(target=_bg, daemon=True).start()
+        return _clone_items(cached_items)
+
+    # 캐시 없거나 force_refresh: 동기 fetch
     items = build_market_items()
-
     with _CACHE_LOCK:
         _MARKET_CACHE["items"] = items
         _MARKET_CACHE["fetched_at"] = datetime.now()
-
     return _clone_items(items)
 
 
