@@ -242,9 +242,15 @@ def normalize_chart_ticker(raw: str) -> str:
 
 
 def _to_float_or_none(value: Any) -> float | None:
+    import math
     try:
+        if value is None:
+            return None
         text = str(value).replace(",", "").strip()
-        return None if text == "" else float(text)
+        if text in ("", "nan", "NaN", "inf", "-inf", "None", "N/A"):
+            return None
+        result = float(text)
+        return None if math.isnan(result) or math.isinf(result) else result
     except Exception:
         return None
 
@@ -823,20 +829,33 @@ def get_quote_for_input(ticker: str) -> dict[str, Any]:
     return get_yf_quote_with_fallback(normalized, name=normalized)
 
 
+def _safe_float(value: Any) -> float | None:
+    """yfinance NaN/inf를 None으로 변환 — JSON 직렬화 안전"""
+    import math
+    try:
+        f = float(value)
+        return None if math.isnan(f) or math.isinf(f) else f
+    except Exception:
+        return None
+
+
 def _history_to_items(history: Any) -> list[dict[str, Any]]:
     if history is None or getattr(history, "empty", True):
         return []
     items: list[dict[str, Any]] = []
     for idx, row in history.iterrows():
         try:
+            close = _safe_float(row["Close"])
+            if close is None:  # Close가 NaN이면 이 행은 의미없음 → 스킵
+                continue
             items.append(
                 {
                     "date": idx.strftime("%Y-%m-%d"),
-                    "open": float(row["Open"]),
-                    "high": float(row["High"]),
-                    "low": float(row["Low"]),
-                    "close": float(row["Close"]),
-                    "volume": float(row["Volume"]),
+                    "open": _safe_float(row["Open"]),
+                    "high": _safe_float(row["High"]),
+                    "low": _safe_float(row["Low"]),
+                    "close": close,
+                    "volume": _safe_float(row["Volume"]),
                 }
             )
         except Exception:
@@ -1513,9 +1532,21 @@ def health():
     return {"ok": True, "service": "stock-dashboard-api"}
 
 
+def _sanitize_for_json(obj: Any) -> Any:
+    """NaN/inf를 None으로 재귀 치환 — JSON 직렬화 안전"""
+    import math
+    if isinstance(obj, float):
+        return None if (math.isnan(obj) or math.isinf(obj)) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_for_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_for_json(v) for v in obj]
+    return obj
+
+
 @app.get("/market")
 def market():
-    return {"items": get_cached_market_items()}
+    return _sanitize_for_json({"items": get_cached_market_items()})
 
 
 @app.get("/stocks")
