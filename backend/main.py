@@ -1266,6 +1266,7 @@ def _fetch_stooq_batch(key_ticker_pairs: list[tuple[str, str]]) -> dict[str, dic
     try:
         res = requests.get(url, timeout=6)
         if res.status_code != 200:
+            print(f"stooq batch HTTP {res.status_code}: {res.text[:80]}")
             return results
         lines = res.text.strip().splitlines()
         for line in lines[1:]:
@@ -1288,9 +1289,37 @@ def _fetch_stooq_batch(key_ticker_pairs: list[tuple[str, str]]) -> dict[str, dic
                 "changePercent": change_pct,
                 "source": "stooq",
             }
+        print(f"stooq batch: {len(results)}/{len(key_ticker_pairs)} success")
     except Exception as exc:
         print("stooq batch error:", exc)
     return results
+
+
+def _fetch_global_item_yf(key: str, ticker: str) -> dict[str, Any]:
+    """Stooq 실패 시 yfinance 직접 폴백 (get_market_quote_light 우회)"""
+    label = INDEX_LABELS.get(key, key)
+    try:
+        items = fetch_yf_chart(ticker, period="5d")
+        if len(items) >= 2:
+            price = _to_float_or_none(items[-1].get("close"))
+            prev_close = _to_float_or_none(items[-2].get("close"))
+            change = None
+            change_pct = None
+            if price is not None and prev_close not in (None, 0):
+                change = round(price - prev_close, 4)
+                change_pct = round((change / prev_close) * 100, 4)
+            return {"key": key, "name": label, "ticker": ticker,
+                    "price": round(price, 4) if price else None,
+                    "change": change, "changePercent": change_pct, "source": "yf_history"}
+        elif len(items) == 1:
+            price = _to_float_or_none(items[0].get("close"))
+            return {"key": key, "name": label, "ticker": ticker,
+                    "price": round(price, 4) if price else None,
+                    "change": None, "changePercent": None, "source": "yf_history"}
+    except Exception as exc:
+        print(f"yf fallback error {key}:", exc)
+    return {"key": key, "name": label, "ticker": ticker,
+            "price": None, "change": None, "changePercent": None, "source": "error"}
 
 
 def build_market_items() -> list[dict[str, Any]]:
@@ -1317,7 +1346,8 @@ def build_market_items() -> list[dict[str, Any]]:
             except Exception as exc:
                 print("market future error:", k, exc)
 
-    # 글로벌 지수: Stooq 배치 결과 사용, 실패한 것만 개별 fallback
+    # 글로벌 지수: Stooq 배치 결과 우선, 실패한 것만 yfinance 직접 폴백
+    yf_fallback_keys = []
     for key, ticker in global_keys:
         label = INDEX_LABELS.get(key, key)
         stooq_data = stooq_results.get(key)
@@ -1332,17 +1362,23 @@ def build_market_items() -> list[dict[str, Any]]:
                 "source": stooq_data["source"],
             })
         else:
-            # Stooq 배치 실패 시 개별 fallback (yfinance)
-            try:
-                quote = get_market_quote_light(ticker, label)
-                quote["key"] = key
-                quote.pop("extended", None)
-                quote.pop("hasExtended", None)
-                items.append(quote)
-            except Exception as exc:
-                print("market fallback error:", key, exc)
-                items.append({"key": key, "name": label, "ticker": ticker,
-                               "price": None, "change": None, "changePercent": None})
+            yf_fallback_keys.append((key, ticker))
+
+    # yfinance 폴백: 병렬로 처리 (Stooq과 달리 rate limit 없음)
+    if yf_fallback_keys:
+        print(f"yf fallback for {len(yf_fallback_keys)} items: {[k for k,_ in yf_fallback_keys]}")
+        max_workers = min(4, len(yf_fallback_keys))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures2 = [(k, t, executor.submit(_fetch_global_item_yf, k, t)) for k, t in yf_fallback_keys]
+            for k, t, future in futures2:
+                try:
+                    items.append(future.result())
+                except Exception as exc:
+                    print("yf future error:", k, exc)
+                    label = INDEX_LABELS.get(k, k)
+                    items.append({"key": k, "name": label, "ticker": t,
+                                  "price": None, "change": None, "changePercent": None,
+                                  "source": "error"})
 
     items.sort(key=lambda item: INDEX_ORDER.index(item["key"]) if item.get("key") in INDEX_ORDER else 999)
     return items
