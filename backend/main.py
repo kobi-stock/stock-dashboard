@@ -1253,20 +1253,96 @@ def _fetch_single_market_item(key: str, ticker: str) -> dict[str, Any]:
     return quote
 
 
+def _fetch_stooq_batch(key_ticker_pairs: list[tuple[str, str]]) -> dict[str, dict[str, Any]]:
+    """Stooq 배치 API — 여러 티커를 한 번에 요청해 rate limit 방지"""
+    stooq_map: dict[str, str] = {}  # stooq_ticker -> key
+    for key, ticker in key_ticker_pairs:
+        st = ticker.replace("^", "").replace("=F", "f").lower()
+        stooq_map[st] = key
+
+    symbols = ",".join(stooq_map.keys())
+    url = f"https://stooq.com/q/l/?s={symbols}&f=sd2t2ohlcv&h&e=csv"
+    results: dict[str, dict[str, Any]] = {}
+    try:
+        res = requests.get(url, timeout=6)
+        if res.status_code != 200:
+            return results
+        lines = res.text.strip().splitlines()
+        for line in lines[1:]:
+            cols = line.split(",")
+            if len(cols) < 7:
+                continue
+            st_sym = cols[0].lower()
+            key = stooq_map.get(st_sym)
+            if not key:
+                continue
+            price = _to_float_or_none(cols[6])
+            open_price = _to_float_or_none(cols[3])
+            if price is None or price <= 0 or open_price is None:
+                continue
+            change = round(price - open_price, 4)
+            change_pct = round((change / open_price) * 100, 4) if open_price != 0 else None
+            results[key] = {
+                "price": round(price, 4),
+                "change": change,
+                "changePercent": change_pct,
+                "source": "stooq",
+            }
+    except Exception as exc:
+        print("stooq batch error:", exc)
+    return results
+
+
 def build_market_items() -> list[dict[str, Any]]:
     keys = list(INDEX_TICKERS.items())
     if not keys:
         return []
 
+    # KOSPI/KOSDAQ는 Naver, 나머지는 Stooq 배치로 한 번에
+    korean_keys = [(k, t) for k, t in keys if k in {"KOSPI", "KOSDAQ"}]
+    global_keys = [(k, t) for k, t in keys if k not in {"KOSPI", "KOSDAQ"}]
+
+    # Stooq 배치 요청 (단일 HTTP 호출)
+    stooq_results = _fetch_stooq_batch(global_keys)
+
     items: list[dict[str, Any]] = []
-    max_workers = min(6, len(keys)) or 1
+
+    # 한국 지수: Naver 폴링 (기존 방식, 2개라 동시 OK)
+    max_workers = min(2, len(korean_keys)) or 1
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(_fetch_single_market_item, key, ticker) for key, ticker in keys]
-        for future in futures:
+        futures = [(k, t, executor.submit(_fetch_single_market_item, k, t)) for k, t in korean_keys]
+        for k, t, future in futures:
             try:
                 items.append(future.result())
             except Exception as exc:
-                print("market future error:", exc)
+                print("market future error:", k, exc)
+
+    # 글로벌 지수: Stooq 배치 결과 사용, 실패한 것만 개별 fallback
+    for key, ticker in global_keys:
+        label = INDEX_LABELS.get(key, key)
+        stooq_data = stooq_results.get(key)
+        if stooq_data:
+            items.append({
+                "key": key,
+                "name": label,
+                "ticker": ticker,
+                "price": stooq_data["price"],
+                "change": stooq_data["change"],
+                "changePercent": stooq_data["changePercent"],
+                "source": stooq_data["source"],
+            })
+        else:
+            # Stooq 배치 실패 시 개별 fallback (yfinance)
+            try:
+                quote = get_market_quote_light(ticker, label)
+                quote["key"] = key
+                quote.pop("extended", None)
+                quote.pop("hasExtended", None)
+                items.append(quote)
+            except Exception as exc:
+                print("market fallback error:", key, exc)
+                items.append({"key": key, "name": label, "ticker": ticker,
+                               "price": None, "change": None, "changePercent": None})
 
     items.sort(key=lambda item: INDEX_ORDER.index(item["key"]) if item.get("key") in INDEX_ORDER else 999)
     return items
